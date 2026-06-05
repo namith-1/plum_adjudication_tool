@@ -1,0 +1,50 @@
+{
+  "document_type": "Prescription",
+  "doctor_details": {
+    "name": "Dr. [TEST DOCTOR NAME]",
+    "qualifications": "M.B.B.S., M.D., M.S.",
+    "registration_number": "270988",
+    "mobile_number": "[TEST MOBILE NUMBER]",
+    "clinic_name": "[TEST CLINIC NAME]",
+    "clinic_address": "Near [TEST ADDRESS LOCATION], Pune - 411038",
+    "clinic_phone": "[TEST PHONE NUMBER]",
+    "timing": "09:00 AM - 02:00 PM | Closed: Thursday"
+  },
+  "patient_details": {
+    "member_id": "EMP001",
+    "member_name": "Rajesh Kumar",
+    "treatment_date": "2024-11-04",
+    "address": "PUNE",
+    "vitals": {
+      "temperature_deg": 36,
+      "blood_pressure_mmhg": "120/80"
+    }
+  },
+  "prescription": [
+    {
+      "medicine_name": "TAB. DEMO MEDICINE 1",
+      "dosage": "1 Morning, 1 Night (Before Food)",
+      "duration": "10 Days (Tot:20 Tab)"
+    },
+    {
+      "medicine_name": "CAP. DEMO MEDICINE 2",
+      "dosage": "1 Morning, 1 Night (Before Food)",
+      "duration": "10 Days (Tot:20 Cap)"
+    },
+    {
+      "medicine_name": "TAB. DEMO MEDICINE 3",
+      "dosage": "1 Morning, 1 Aft, 1 Eve, 1 Night (After Food)",
+      "duration": "10 Days (Tot:40 Tab)"
+    },
+    {
+      "medicine_name": "TAB. DEMO MEDICINE 4",
+      "dosage": "1/2 Morning, 1/2 Night (After Food)",
+      "duration": "10 Days (Tot:10 Tab)"
+    }
+  ],
+  "advice_given": [
+    "AVOID OILY AND SPICY FOOD"
+  ],
+  "follow_up_date": "12-05-2020",
+  "additional_notes": "CHOICE TO PRINT CHART ON Rx included with Temperature and Blood Pressure graphs."
+}

@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OPD Document Extraction Tester</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <nav class="tabs" aria-label="Workspace tabs">
+        <button class="tab-button active" type="button" data-tab="claimTab">Claim tester</button>
+        <button class="tab-button" type="button" data-tab="setupTab">Add data</button>
+      </nav>
+
+      <section id="claimTab" class="tab-panel active">
+        <div class="shell">
+          <section class="panel">
+            <div class="header">
+              <div>
+                <p class="eyebrow">Groq extraction</p>
+                <h1>OPD Document JSON Tester</h1>
+              </div>
+              <span id="statusBadge" class="badge">Ready</span>
+            </div>
+
+            <form id="uploadForm" class="form">
+              <div class="grid-fields">
+                <label class="field">
+                  <span>Member ID</span>
+                  <input id="memberId" name="member_id" type="text" placeholder="EMP001" required />
+                </label>
+
+                <label class="field">
+                  <span>Name</span>
+                  <input id="memberName" name="member_name" type="text" placeholder="Rajesh Kumar" required />
+                </label>
+
+                <label class="field">
+                  <span>Claim amount</span>
+                  <input id="claimAmount" name="claim_amount" type="number" min="1" step="1" placeholder="1500" required />
+                </label>
+
+                <label class="field">
+                  <span>Submission date</span>
+                  <input id="submissionDate" name="submission_date" type="date" />
+                </label>
+
+                <label class="field">
+                  <span>Mode</span>
+                  <select id="adjudicationMode" name="adjudication_mode">
+                    <option value="normal" selected>Normal</option>
+                    <option value="strict">Strict</option>
+                  </select>
+                </label>
+              </div>
+
+              <label class="field">
+                <span>Previous medical conditions</span>
+                <input id="previousConditions" name="previous_medical_conditions" type="text" placeholder="diabetes, hypertension" />
+              </label>
+
+              <label class="check-field">
+                <input id="updateDbOnManualReview" name="update_db_on_manual_review" type="checkbox" />
+                <span>Save manual review claims to DB</span>
+              </label>
+
+              <label class="dropzone" for="documents">
+                <span class="drop-title">Choose documents</span>
+                <span class="drop-copy">Images, PDFs, text files, and DOCX files are supported.</span>
+                <span class="drop-copy">The output includes logo, sign, and stamp boxes plus unmapped leftover data.</span>
+                <input id="documents" name="documents" type="file" multiple />
+              </label>
+
+              <div id="fileList" class="file-list" aria-live="polite"></div>
+
+              <label class="field">
+                <span>Extra instructions</span>
+                <textarea
+                  id="instructions"
+                  name="instructions"
+                  rows="4"
+                  placeholder="Optional: add any special extraction instruction for this test."
+                ></textarea>
+              </label>
+
+              <div class="actions">
+                <button id="submitButton" type="submit">Submit Claim</button>
+                <button id="clearButton" type="button" class="secondary">Clear</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel output-panel">
+            <div class="output-header">
+              <h2>Output JSON</h2>
+              <div class="output-actions">
+                <button id="saveManualReviewButton" type="button" class="icon-button hidden" title="Save manual review to DB">Update DB</button>
+                <button id="downloadButton" type="button" class="icon-button" title="Download JSON">Download</button>
+                <button id="copyButton" type="button" class="icon-button" title="Copy JSON">Copy</button>
+              </div>
+            </div>
+            <div id="resultView" class="result-view">
+              <p class="empty-state">Submit a claim to see the adjudication summary.</p>
+            </div>
+            <pre id="output" class="output">{}</pre>
+          </section>
+        </div>
+      </section>
+
+      <section id="setupTab" class="tab-panel">
+        <div class="setup-shell">
+          <section class="panel">
+            <div class="header">
+              <div>
+                <p class="eyebrow">Mongo setup</p>
+                <h1>Add Users & Policies</h1>
+              </div>
+              <span id="adminStatusBadge" class="badge">Ready</span>
+            </div>
+
+            <div class="admin-grid">
+              <form id="userForm" class="form admin-card">
+                <h2>Add User</h2>
+                <div class="grid-fields">
+                  <label class="field"><span>Member ID</span><input name="member_id" type="text" placeholder="EMP011" required /></label>
+                  <label class="field"><span>Name</span><input name="member_name" type="text" placeholder="Asha Rao" required /></label>
+                  <label class="field"><span>Type</span>
+                    <select id="memberType" name="member_type">
+                      <option value="Employee">Employee</option>
+                      <option value="Dependent">Dependent</option>
+                    </select>
+                  </label>
+                  <label id="primaryMemberField" class="field hidden"><span>Primary employee</span><select id="primaryMemberSelect" name="primary_member_id"></select></label>
+                  <label class="field"><span>Date of birth</span><input name="date_of_birth" type="date" /></label>
+                  <label class="field"><span>Gender</span>
+                    <select name="gender">
+                      <option value="">Unknown</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </label>
+                  <label class="field"><span>Company</span><input name="company_name" type="text" placeholder="TechCorp Solutions Pvt Ltd" required /></label>
+                  <label class="field"><span>Join date</span><input name="join_date" type="date" required /></label>
+                </div>
+                <label class="field"><span>Pre-existing conditions</span><input name="pre_existing_conditions" type="text" placeholder="diabetes, hypertension" /></label>
+                <div class="actions">
+                  <button type="submit">Save User</button>
+                </div>
+              </form>
+
+              <form id="policyForm" class="form admin-card">
+                <h2>Add Policy</h2>
+                <div class="grid-fields">
+                  <label class="field"><span>Policy ID</span><input name="policy_id" type="text" placeholder="PLUM_OPD_2025" required /></label>
+                  <label class="field"><span>Policy name</span><input name="policy_name" type="text" placeholder="Plum OPD Advantage" required /></label>
+                  <label class="field"><span>Company</span><input name="company_name" type="text" placeholder="TechCorp Solutions Pvt Ltd" required /></label>
+                  <label class="field"><span>Effective date</span><input name="effective_date" type="date" required /></label>
+                  <label class="field"><span>Annual limit</span><input name="annual_limit" type="number" value="50000" min="0" /></label>
+                  <label class="field"><span>Per claim limit</span><input name="per_claim_limit" type="number" value="5000" min="0" /></label>
+                  <label class="field"><span>Submission days</span><input name="submission_timeline_days" type="number" value="30" min="0" /></label>
+                  <label class="field"><span>Initial waiting days</span><input name="initial_waiting_days" type="number" value="30" min="0" /></label>
+                </div>
+                <label class="field"><span>Exclusions</span><input name="exclusions" type="text" placeholder="Cosmetic procedures, Weight loss treatments" /></label>
+                <label class="field"><span>Documents required</span><input name="documents_required" type="text" placeholder="Original bills, Prescription from registered doctor" /></label>
+                <div class="check-grid admin-checks">
+                  <label class="check-field"><input name="dental_covered" type="checkbox" /> <span>Dental</span></label>
+                  <label class="check-field"><input name="vision_covered" type="checkbox" /> <span>Vision</span></label>
+                  <label class="check-field"><input name="alternative_covered" type="checkbox" /> <span>Alternative medicine</span></label>
+                  <label class="check-field"><input name="cashless_available" type="checkbox" /> <span>Cashless</span></label>
+                </div>
+                <div class="actions">
+                  <button type="submit">Save Policy</button>
+                </div>
+              </form>
+
+              <form id="linkPolicyForm" class="form admin-card">
+                <h2>Link User Policy</h2>
+                <div class="grid-fields">
+                  <label class="field"><span>User</span><select id="linkUserSelect" name="member_id" required></select></label>
+                  <label class="field"><span>Policy</span><select id="linkPolicySelect" name="policy_id" required></select></label>
+                  <label class="field"><span>Enrollment date</span><input name="enrollment_date" type="date" required /></label>
+                  <label class="field"><span>Status</span>
+                    <select name="status">
+                      <option value="Active">Active</option>
+                      <option value="Inactive">Inactive</option>
+                      <option value="Expired">Expired</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="actions">
+                  <button type="submit">Link Policy</button>
+                  <button id="refreshAdminButton" type="button" class="secondary">Refresh Lists</button>
+                </div>
+              </form>
+            </div>
+          </section>
+
+          <section class="panel output-panel">
+            <div class="output-header">
+              <h2>Admin Output</h2>
+            </div>
+            <pre id="adminOutput" class="output">{}</pre>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
