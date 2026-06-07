@@ -15,6 +15,12 @@ STRICT EXTRACTION RULES
 - Zero Data Loss (CRITICAL): If you find ANY text, note, stamp text, logo text, header/footer, table label, number, handwritten data, margin note, instruction, checkbox label, payment note, disclaimer, or visual clue that does not fit into predefined schema keys, place it inside unmapped_data for that document. Attempt to structure it in structured_extras, and also preserve leftover raw text in raw_leftover_text. Do not discard anything.
 - Full Text Preservation (CRITICAL): Store all visible text for each document in unmapped_data.raw_full_visible_text, even if the same value is also mapped into a schema field. This prevents data loss.
 - Support Evidence (CRITICAL): If the document contains evidence that supports a bill item, such as investigation advice, prescribed medicines, treatment advice, procedure advice, diagnosis, or referral notes, extract it into mapped fields when possible and also preserve it in unmapped_data. This will be used later to decide whether pharmacy/procedure/diagnostic bills can be claimed.
+- Categorize by CONTENT, not only by document title or filename:
+  - If a page/document contains medicine or generic drug line items, extract those medicine items under pharmacy_bills even if the visible title says medical bill or combined bill.
+  - If a page/document contains lab tests, scans, imaging, blood tests, pathology, radiology, MRI, CT, X-ray, ultrasound, or diagnostic result content, extract those items under diagnostic_reports or diagnostic bill/support sections as applicable.
+  - If a page/document contains consultation, procedure, surgery, dressing, therapy, injection administration, or hospital/clinic service charges, extract those items under medical_bills.
+  - If one physical page/document is combined, duplicate the relevant extracted content into every applicable bucket. For example, a combined hospital bill with consultation, medicines, and CBC test should appear in medical_bills, pharmacy_bills, and diagnostic_reports with the same source identity preserved in unmapped_data. Do not force it into only one category.
+  - Medicine names may be brands or generic drugs. Treat generic drug names as pharmacy/medicine content.
 - No Hallucinations: Only extract what is visibly present. If missing/unreadable, return null. Do NOT guess.
 - Date Formatting: Use standard YYYY-MM-DD.
 - Return only valid JSON. Do not wrap the JSON in markdown.

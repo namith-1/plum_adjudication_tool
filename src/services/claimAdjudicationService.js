@@ -6,6 +6,10 @@ const { buildRagContext } = require('./ragContextService');
 const { reviewClaimEvidence, applyEvidenceReview } = require('./claimEvidenceReviewService');
 const { applyPolicyGuard } = require('./claimPolicyGuardService');
 
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 function collectConfidenceScores(value, scores = []) {
   if (!value || typeof value !== 'object') {
     return scores;
@@ -87,25 +91,196 @@ function sumLineItemAmounts(documents, amountKey = 'amount') {
   }, 0);
 }
 
+function getLineAmount(item) {
+  return toNumber(item.amount || item.total_amount || item.net_amount || item.net_payable);
+}
+
+function getDocumentName(document, fallback) {
+  return (
+    document.bill_details?.bill_number ||
+    document.report_details?.report_id ||
+    document.pharmacy_info?.name ||
+    document.hospital_info?.name ||
+    document.lab_info?.name ||
+    document.clinic_info?.name ||
+    fallback
+  );
+}
+
+function classifyLineItem(item) {
+  const text = [
+    item.category,
+    item.description,
+    item.medicine_name,
+    item.test_name,
+    item.procedure_or_service,
+    item.item,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (
+    text.includes('medicine') ||
+    text.includes('tablet') ||
+    text.includes('capsule') ||
+    text.includes('syrup') ||
+    text.includes('injection') ||
+    text.includes('drug') ||
+    text.includes('pharma') ||
+    text.includes('mg')
+  ) {
+    return 'pharmacy_bill';
+  }
+
+  if (
+    text.includes('diagnostic') ||
+    text.includes('test') ||
+    text.includes('lab') ||
+    text.includes('blood') ||
+    text.includes('cbc') ||
+    text.includes('mri') ||
+    text.includes('ct') ||
+    text.includes('x-ray') ||
+    text.includes('xray') ||
+    text.includes('scan') ||
+    text.includes('ultrasound')
+  ) {
+    return 'diagnostic_report';
+  }
+
+  if (
+    text.includes('procedure') ||
+    text.includes('surgery') ||
+    text.includes('therapy') ||
+    text.includes('dressing') ||
+    text.includes('root canal') ||
+    text.includes('administration')
+  ) {
+    return 'procedure';
+  }
+
+  return 'medical_bill';
+}
+
+function emptyAmountBreakdown() {
+  return {
+    prescription: { total: 0, documents: [] },
+    medical_bill: { total: 0, documents: [] },
+    pharmacy_bill: { total: 0, documents: [] },
+    diagnostic_report: { total: 0, documents: [] },
+    procedure: { total: 0, documents: [] },
+    other: { total: 0, documents: [] },
+  };
+}
+
+function pushBreakdownDocument(breakdown, bucket, document) {
+  breakdown[bucket].documents.push(document);
+  breakdown[bucket].total += toNumber(document.amount);
+}
+
+function itemName(item) {
+  return item.description || item.medicine_name || item.test_name || item.procedure_or_service || item.item || 'Item';
+}
+
+function buildDocumentAmountBreakdown(extraction) {
+  const documents = extraction?.claim_extraction?.documents || {};
+  const breakdown = emptyAmountBreakdown();
+
+  safeArray(documents.prescriptions).forEach((document, index) => {
+    pushBreakdownDocument(breakdown, 'prescription', {
+      name: getDocumentName(document, `Prescription ${index + 1}`),
+      amount: 0,
+      items: [
+        ...safeArray(document.prescribed_medicines).map((item) => ({ name: item.name || 'Medicine advised', amount: 0 })),
+        ...safeArray(document.investigations_advised).map((name) => ({ name, amount: 0 })),
+      ],
+    });
+  });
+
+  safeArray(documents.medical_bills).forEach((document, index) => {
+    const grouped = {};
+    safeArray(document.line_items).forEach((item) => {
+      const bucket = classifyLineItem(item);
+      grouped[bucket] = grouped[bucket] || [];
+      grouped[bucket].push({ name: itemName(item), amount: getLineAmount(item) });
+    });
+
+    if (Object.keys(grouped).length === 0) {
+      pushBreakdownDocument(breakdown, 'medical_bill', {
+        name: getDocumentName(document, `Medical Bill ${index + 1}`),
+        amount: toNumber(document.financials?.total_amount),
+        items: [],
+      });
+      return;
+    }
+
+    Object.entries(grouped).forEach(([bucket, items]) => {
+      const amount = items.reduce((total, item) => total + toNumber(item.amount), 0);
+      pushBreakdownDocument(breakdown, bucket, {
+        name: getDocumentName(document, `Medical Bill ${index + 1}`),
+        amount,
+        items,
+      });
+    });
+  });
+
+  safeArray(documents.pharmacy_bills).forEach((document, index) => {
+    const items = safeArray(document.line_items).map((item) => ({
+      name: itemName(item),
+      amount: getLineAmount(item),
+    }));
+    const amount =
+      toNumber(document.financials?.net_payable || document.financials?.total_amount) ||
+      items.reduce((total, item) => total + toNumber(item.amount), 0);
+    pushBreakdownDocument(breakdown, 'pharmacy_bill', {
+      name: getDocumentName(document, `Pharmacy Bill ${index + 1}`),
+      amount,
+      items,
+    });
+  });
+
+  safeArray(documents.diagnostic_reports).forEach((document, index) => {
+    const items = safeArray(document.test_results).map((item) => ({
+      name: item.test_name || item.panel_name || 'Diagnostic test',
+      amount: getLineAmount(item),
+    }));
+    const amount = items.reduce((total, item) => total + toNumber(item.amount), 0);
+    pushBreakdownDocument(breakdown, 'diagnostic_report', {
+      name: getDocumentName(document, `Diagnostic Report ${index + 1}`),
+      amount,
+      items,
+    });
+  });
+
+  Object.values(breakdown).forEach((bucket) => {
+    bucket.total = Number(bucket.total.toFixed(2));
+  });
+
+  return breakdown;
+}
+
 function summarizeExtractedAmounts(extraction, requestedClaimAmount) {
-  const medicalBills = getDocuments(extraction, 'medical_bills');
-  const pharmacyBills = getDocuments(extraction, 'pharmacy_bills');
-  const medicalBillTotal =
-    medicalBills.reduce((total, bill) => total + toNumber(bill.financials?.total_amount), 0) ||
-    sumLineItemAmounts(medicalBills);
-  const pharmacyBillTotal =
-    pharmacyBills.reduce((total, bill) => total + toNumber(bill.financials?.net_payable || bill.financials?.total_amount), 0) ||
-    sumLineItemAmounts(pharmacyBills, 'total_amount');
-  const totalExtractedBillAmount = medicalBillTotal + pharmacyBillTotal;
+  const documentAmountBreakdown = buildDocumentAmountBreakdown(extraction);
+  const medicalBillTotal = documentAmountBreakdown.medical_bill.total;
+  const pharmacyBillTotal = documentAmountBreakdown.pharmacy_bill.total;
+  const categorizedTotal = Object.entries(documentAmountBreakdown)
+    .filter(([key]) => key !== 'prescription')
+    .reduce((total, [, bucket]) => total + toNumber(bucket.total), 0);
+  const totalExtractedBillAmount = categorizedTotal;
   const requestedAmount = toNumber(requestedClaimAmount);
 
   return {
     claimed_amount_from_request: requestedAmount,
+    claim_amount_is_display_only: true,
     medical_bill_total: medicalBillTotal,
     pharmacy_bill_total: pharmacyBillTotal,
+    diagnostic_bill_total: documentAmountBreakdown.diagnostic_report.total,
+    procedure_total: documentAmountBreakdown.procedure.total,
     total_extracted_bill_amount: totalExtractedBillAmount,
     difference_from_requested: totalExtractedBillAmount - requestedAmount,
     amount_matches_request: requestedAmount === 0 ? null : Math.abs(totalExtractedBillAmount - requestedAmount) <= 1,
+    document_amount_breakdown: documentAmountBreakdown,
   };
 }
 
@@ -190,7 +365,7 @@ async function runAiAdjudication({ precheck, extraction, claimInput }) {
         2
       ),
     },
-  ], { maxCompletionTokens: 2048, attempts: 4 });
+  ], { maxCompletionTokens: Number(process.env.AI_ADJUDICATION_MAX_OUTPUT_TOKENS || 12000), attempts: 4 });
 
   const adjudication = {
     ...groqResult.json,

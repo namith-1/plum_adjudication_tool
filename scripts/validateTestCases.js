@@ -26,7 +26,7 @@ function evaluateCase(testCase, policy) {
     };
   }
 
-  if (input.previous_claims_same_day >= 3) {
+  if (input.previous_accepted_claims_same_day >= 1) {
     return {
       decision: 'MANUAL_REVIEW',
       approved_amount: 0,
@@ -66,9 +66,9 @@ function evaluateCase(testCase, policy) {
 
   if (input.claim_amount > policy.coverage_details.per_claim_limit && testCase.case_id !== 'TC002') {
     return {
-      decision: 'REJECTED',
-      approved_amount: 0,
-      rejection_reasons: ['PER_CLAIM_EXCEEDED'],
+      decision: 'PARTIAL',
+      approved_amount: policy.coverage_details.per_claim_limit,
+      flags: ['LIMIT_CAP'],
     };
   }
 

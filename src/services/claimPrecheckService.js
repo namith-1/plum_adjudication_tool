@@ -148,7 +148,6 @@ async function runClaimPrecheck(input) {
   const requiredFields = {
     member_id: memberId,
     member_name: memberName,
-    claim_amount: input.claim_amount,
   };
   const missingFields = Object.entries(requiredFields)
     .filter(([, value]) => value === undefined || value === null || value === '')
@@ -161,13 +160,8 @@ async function runClaimPrecheck(input) {
   }
 
   const treatmentDate = parseDate(input.treatment_date, 'treatment_date');
-  const claimAmount = Number(input.claim_amount);
-
-  if (!Number.isFinite(claimAmount) || claimAmount <= 0) {
-    const error = new Error('claim_amount must be a positive number');
-    error.statusCode = 400;
-    throw error;
-  }
+  const displayClaimAmount = Number(input.claim_amount);
+  const claimAmount = Number.isFinite(displayClaimAmount) && displayClaimAmount > 0 ? displayClaimAmount : 0;
 
   if (treatmentDate > new Date()) {
     return reject('INVALID_TREATMENT_DATE', 'Treatment date cannot be in the future.');
@@ -281,6 +275,7 @@ async function runClaimPrecheck(input) {
         policy: policy.toObject ? policy.toObject() : policy,
         claim: {
           claim_amount: claimAmount,
+          claim_amount_display_only: true,
           treatment_date: formatDate(treatmentDate),
           previous_medical_conditions: knownConditions,
           submission_date: formatDate(submissionDate),
@@ -320,20 +315,6 @@ async function runClaimPrecheck(input) {
   const totalClaimedYtd = userPolicy.utilization?.total_claimed_amount_ytd || 0;
   const precheckWarnings = [];
 
-  if (minimumClaimAmount && claimAmount < minimumClaimAmount) {
-    return reject('BELOW_MIN_AMOUNT', `Claim amount is below minimum claim amount of ${minimumClaimAmount}.`, {
-      minimum_claim_amount: minimumClaimAmount,
-    });
-  }
-
-  if (perClaimLimit && claimAmount > perClaimLimit) {
-    precheckWarnings.push({
-      code: 'PER_CLAIM_EXCEEDED',
-      notes: `Requested claim amount exceeds per-claim limit of ${perClaimLimit}. Do not reject only for this. AI adjudication should approve the calculated eligible amount and add an amount remark.`,
-      per_claim_limit: perClaimLimit,
-    });
-  }
-
   if (annualLimit && totalClaimedYtd >= annualLimit) {
     return reject('ANNUAL_LIMIT_EXHAUSTED', 'Annual policy limit is already exhausted.', {
       annual_limit: annualLimit,
@@ -342,23 +323,13 @@ async function runClaimPrecheck(input) {
     });
   }
 
-  if (annualLimit && totalClaimedYtd + claimAmount > annualLimit) {
-    precheckWarnings.push({
-      code: 'ANNUAL_LIMIT_EXCEEDED',
-      notes: 'Requested claim amount exceeds remaining annual limit. Do not reject only for this. AI adjudication should approve the calculated eligible amount up to remaining annual limit and add an amount remark.',
-      annual_limit: annualLimit,
-      total_claimed_amount_ytd: totalClaimedYtd,
-      remaining_annual_limit: Math.max(annualLimit - totalClaimedYtd, 0),
-    });
-  }
-
   return {
     passed: true,
     decision: 'PRELIMINARY_ELIGIBILITY_PASSED',
     notes:
       precheckWarnings.length > 0
-        ? 'User, active policy, treatment date, and waiting period passed. Amount warnings will be handled in adjudication.'
-        : 'User, active policy, treatment date, waiting period, and basic amount checks passed.',
+        ? 'User, active policy, treatment date, and waiting period passed. Extracted amount and policy caps will be handled in adjudication.'
+        : 'User, active policy, treatment date, and waiting period passed.',
     warnings: precheckWarnings,
     member: {
       id: user._id,
@@ -380,6 +351,7 @@ async function runClaimPrecheck(input) {
     policy: policy.toObject ? policy.toObject() : policy,
     claim: {
       claim_amount: claimAmount,
+      claim_amount_display_only: true,
       treatment_date: formatDate(treatmentDate),
       previous_medical_conditions: knownConditions,
       submission_date: formatDate(submissionDate),

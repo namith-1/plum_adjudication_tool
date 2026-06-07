@@ -1,5 +1,5 @@
 const path = require('path');
-const { createCanvas } = require('@napi-rs/canvas');
+const { pathToFileURL } = require('url');
 const mammoth = require('mammoth');
 
 const IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
@@ -25,54 +25,58 @@ function textPart(filename, text) {
   };
 }
 
-function packageDirectoryPath(packagePath) {
-  return `${path.dirname(require.resolve(packagePath))}${path.sep}`;
+function directoryFileUrl(directoryPath) {
+  return pathToFileURL(`${directoryPath}${path.sep}`).href;
+}
+
+function getPdfToImgAssetUrls() {
+  const pdfToImgEntry = require.resolve('pdf-to-img');
+  const pdfToImgRoot = path.resolve(path.dirname(pdfToImgEntry), '..');
+  const pdfjsRoot = path.join(pdfToImgRoot, 'node_modules', 'pdfjs-dist');
+
+  return {
+    standardFontDataUrl: directoryFileUrl(path.join(pdfjsRoot, 'standard_fonts')),
+    cMapUrl: directoryFileUrl(path.join(pdfjsRoot, 'cmaps')),
+  };
 }
 
 async function renderPdfPagesToImageParts(file) {
-  const pdfWorker = await import('pdfjs-dist/legacy/build/pdf.worker.mjs');
-
-  globalThis.pdfjsWorker = pdfWorker;
-
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const standardFontDataUrl = packageDirectoryPath('pdfjs-dist/standard_fonts/LiberationSans-Regular.ttf');
+  const { pdf } = await import('pdf-to-img');
   const configuredMaxPages = Number(process.env.PDF_MAX_PAGES || 20);
   const maxPages = Math.max(configuredMaxPages, 20);
-  const loadingTask = pdfjs.getDocument({
-    data: new Uint8Array(file.buffer),
-    disableWorker: true,
-    disableFontFace: true,
-    useSystemFonts: false,
-    useWorkerFetch: false,
-    isEvalSupported: false,
-    standardFontDataUrl,
+  const scale = Number(process.env.PDF_IMAGE_SCALE || 3);
+  const document = await pdf(file.buffer, {
+    scale,
+    docInitParams: {
+      ...getPdfToImgAssetUrls(),
+      cMapPacked: true,
+      isEvalSupported: false,
+      verbosity: 0,
+    },
   });
-  const pdf = await loadingTask.promise;
-  const pageCount = Math.min(pdf.numPages, maxPages);
-  const parts = [];
 
-  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 2 });
-    const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
-    const canvasContext = canvas.getContext('2d');
+  try {
+    const pageCount = Math.min(document.length, maxPages);
+    const parts = [];
 
-    await page.render({ canvasContext, viewport }).promise;
+    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+      const imageBuffer = await document.getPage(pageNumber);
+      parts.push({
+        type: 'text',
+        text: `Document: ${file.originalname}, page ${pageNumber} of ${document.length}`,
+      });
+      parts.push({
+        type: 'image_url',
+        image_url: {
+          url: toDataUrl(imageBuffer, 'image/png'),
+        },
+      });
+    }
 
-    const imageBuffer = canvas.toBuffer('image/jpeg', 0.9);
-    parts.push({
-      type: 'text',
-      text: `Document: ${file.originalname}, page ${pageNumber} of ${pdf.numPages}`,
-    });
-    parts.push({
-      type: 'image_url',
-      image_url: {
-        url: toDataUrl(imageBuffer, 'image/jpeg'),
-      },
-    });
+    return parts;
+  } finally {
+    await document.destroy();
   }
-
-  return parts;
 }
 
 async function extractTextFilePart(file) {

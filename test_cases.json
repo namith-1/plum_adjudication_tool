@@ -63,8 +63,8 @@
     },
     {
       "case_id": "TC003",
-      "case_name": "Limit Exceeded - Rejected",
-      "description": "Claim exceeds per-claim limit",
+      "case_name": "Limit Exceeded - Partial Cap",
+      "description": "Extracted/display amount exceeds per-claim limit and should be capped, not rejected only for input amount",
       "input_data": {
         "member_id": "EMP003",
         "member_name": "Amit Verma",
@@ -84,8 +84,9 @@
         }
       },
       "expected_output": {
-        "decision": "REJECTED",
-        "rejection_reasons": ["PER_CLAIM_EXCEEDED"],
+        "decision": "PARTIAL",
+        "approved_amount": 5000,
+        "flags": ["LIMIT_CAP"],
         "notes": "Claim amount exceeds per-claim limit of ₹5000",
         "confidence_score": 0.98
       }
@@ -209,7 +210,7 @@
         "member_name": "Ravi Menon",
         "treatment_date": "2024-10-30",
         "claim_amount": 4800,
-        "previous_claims_same_day": 3,
+        "previous_accepted_claims_same_day": 3,
         "documents": {
           "prescription": {
             "doctor_name": "Dr. Khan",

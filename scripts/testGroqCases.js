@@ -261,7 +261,7 @@ async function main() {
         member_name: input.member_name,
         claim_amount: input.claim_amount,
         submission_date: input.treatment_date,
-        previous_claims_same_day: input.previous_claims_same_day,
+        previous_accepted_claims_same_day: input.previous_accepted_claims_same_day,
         adjudication_mode: 'normal',
         ignore_duplicate_claims: true,
         extraction: buildExtraction(input),

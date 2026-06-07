@@ -1,3 +1,22 @@
+const jaroWinklerSimilarity = require('talisman/metrics/jaro-winkler');
+const doubleMetaphone = require('talisman/phonetics/double-metaphone');
+
+const NAME_TITLE_TOKENS = new Set([
+  'mr',
+  'mrs',
+  'ms',
+  'miss',
+  'master',
+  'baby',
+  'dr',
+  'doctor',
+  'prof',
+  'sri',
+  'smt',
+  'shri',
+  'kumari',
+]);
+
 function safeArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -23,7 +42,7 @@ function normalizeName(value) {
 function nameTokens(value) {
   return normalizeName(value)
     .split(' ')
-    .filter((token) => token.length > 1);
+    .filter((token) => token.length > 1 && !NAME_TITLE_TOKENS.has(token));
 }
 
 function jaroWinkler(left, right) {
@@ -32,60 +51,21 @@ function jaroWinkler(left, right) {
 
   if (!s1 && !s2) return 1;
   if (!s1 || !s2) return 0;
-  if (s1 === s2) return 1;
+  return jaroWinklerSimilarity(s1, s2);
+}
 
-  const matchDistance = Math.max(Math.floor(Math.max(s1.length, s2.length) / 2) - 1, 0);
-  const s1Matches = new Array(s1.length).fill(false);
-  const s2Matches = new Array(s2.length).fill(false);
-  let matches = 0;
+function phoneticLastNameScore(left, right) {
+  const leftName = normalizeName(left).replace(/\s/g, '');
+  const rightName = normalizeName(right).replace(/\s/g, '');
 
-  for (let i = 0; i < s1.length; i += 1) {
-    const start = Math.max(0, i - matchDistance);
-    const end = Math.min(i + matchDistance + 1, s2.length);
+  if (!leftName && !rightName) return 1;
+  if (!leftName || !rightName) return 0;
 
-    for (let j = start; j < end; j += 1) {
-      if (s2Matches[j] || s1[i] !== s2[j]) {
-        continue;
-      }
+  const leftSounds = doubleMetaphone(leftName);
+  const rightSounds = doubleMetaphone(rightName);
+  const soundsMatch = leftSounds.some((sound) => sound && rightSounds.includes(sound));
 
-      s1Matches[i] = true;
-      s2Matches[j] = true;
-      matches += 1;
-      break;
-    }
-  }
-
-  if (matches === 0) return 0;
-
-  let transpositions = 0;
-  let cursor = 0;
-
-  for (let i = 0; i < s1.length; i += 1) {
-    if (!s1Matches[i]) {
-      continue;
-    }
-
-    while (!s2Matches[cursor]) {
-      cursor += 1;
-    }
-
-    if (s1[i] !== s2[cursor]) {
-      transpositions += 1;
-    }
-
-    cursor += 1;
-  }
-
-  const jaro =
-    (matches / s1.length + matches / s2.length + (matches - transpositions / 2) / matches) / 3;
-  const prefixLength = Math.min(
-    4,
-    [...s1].findIndex((char, index) => char !== s2[index]) === -1
-      ? Math.min(s1.length, s2.length)
-      : [...s1].findIndex((char, index) => char !== s2[index])
-  );
-
-  return jaro + prefixLength * 0.1 * (1 - jaro);
+  return soundsMatch ? 0.95 : jaroWinkler(leftName, rightName);
 }
 
 function splitName(value) {
@@ -158,7 +138,7 @@ function patientMatchScore(dbMember, documentPatient) {
   const dbName = splitName(dbMember?.member_name);
   const docName = splitName(documentPatient?.name);
   const firstNameScore = dbName.first && docName.first ? jaroWinkler(dbName.first, docName.first) : 0.5;
-  const lastNameScore = dbName.last && docName.last ? jaroWinkler(dbName.last, docName.last) : 0.5;
+  const lastNameScore = dbName.last && docName.last ? phoneticLastNameScore(dbName.last, docName.last) : 0.5;
   const dateOfBirthScore = dobScore(dbMember?.date_of_birth, documentPatient?.date_of_birth || documentPatient?.dob);
   const sexScore = genderScore(dbMember?.gender, documentPatient?.gender);
   const totalScore =
@@ -173,8 +153,11 @@ function patientMatchScore(dbMember, documentPatient) {
     dob_score: Number(dateOfBirthScore.toFixed(3)),
     gender_score: Number(sexScore.toFixed(3)),
     total_score: Number(totalScore.toFixed(3)),
+    pass_threshold: 0.6,
     db_member_name: dbMember?.member_name || null,
     document_patient_name: documentPatient?.name || null,
+    normalized_db_name: nameTokens(dbMember?.member_name).join(' '),
+    normalized_document_name: nameTokens(documentPatient?.name).join(' '),
     db_dob: normalizeDate(dbMember?.date_of_birth),
     document_dob: normalizeDate(documentPatient?.date_of_birth || documentPatient?.dob),
     db_gender: normalizeGender(dbMember?.gender),
@@ -183,8 +166,7 @@ function patientMatchScore(dbMember, documentPatient) {
 }
 
 function patientMatchDecision(score) {
-  if (score >= 0.85) return 'PASS';
-  if (score >= 0.7) return 'MANUAL_REVIEW';
+  if (score >= 0.6) return 'PASS';
   return 'REJECT';
 }
 
@@ -298,49 +280,200 @@ function hasHighValueMriOrCt(extraction) {
   });
 }
 
+function capAmount(amount, limit) {
+  const numericAmount = toNumber(amount);
+  const numericLimit = toNumber(limit);
+  return numericLimit > 0 ? Math.min(numericAmount, numericLimit) : numericAmount;
+}
+
+function getBackendAmountSummary(adjudication) {
+  return adjudication.backend_amount_summary || {};
+}
+
+function calculateBackendApprovedAmount(adjudication, precheck) {
+  const summary = getBackendAmountSummary(adjudication);
+  const breakdown = summary.document_amount_breakdown || adjudication.document_amount_breakdown || {};
+  const coverage = precheck.policy?.coverage_details || {};
+  const claimRequirements = precheck.policy?.claim_requirements || {};
+  const utilization = precheck.user_policy?.utilization || {};
+
+  const medicalTotal = toNumber(breakdown.medical_bill?.total ?? summary.medical_bill_total);
+  const pharmacyTotal = toNumber(breakdown.pharmacy_bill?.total ?? summary.pharmacy_bill_total);
+  const diagnosticTotal = toNumber(breakdown.diagnostic_report?.total ?? summary.diagnostic_bill_total);
+  const procedureTotal = toNumber(breakdown.procedure?.total ?? summary.procedure_total);
+  const otherTotal = toNumber(breakdown.other?.total);
+
+  const cappedMedical = capAmount(medicalTotal, coverage.consultation_fees?.sub_limit);
+  const cappedPharmacy = capAmount(pharmacyTotal, coverage.pharmacy?.sub_limit);
+  const cappedDiagnostic = capAmount(diagnosticTotal, coverage.diagnostic_tests?.sub_limit);
+  const cappedProcedure = procedureTotal;
+  const cappedOther = otherTotal;
+  const categoryEligibleTotal = cappedMedical + cappedPharmacy + cappedDiagnostic + cappedProcedure + cappedOther;
+  const perClaimCapped = capAmount(categoryEligibleTotal, coverage.per_claim_limit);
+  const remainingAnnualLimit = Math.max(toNumber(coverage.annual_limit) - toNumber(utilization.total_claimed_amount_ytd), 0);
+  const annualCapped = remainingAnnualLimit > 0 ? Math.min(perClaimCapped, remainingAnnualLimit) : perClaimCapped;
+  const minimumClaimAmount = toNumber(claimRequirements.minimum_claim_amount);
+
+  return {
+    extracted_total: medicalTotal + pharmacyTotal + diagnosticTotal + procedureTotal + otherTotal,
+    category_eligible_total: categoryEligibleTotal,
+    approved_amount: Number(annualCapped.toFixed(2)),
+    minimum_claim_amount: minimumClaimAmount,
+    per_claim_limit: toNumber(coverage.per_claim_limit),
+    annual_limit: toNumber(coverage.annual_limit),
+    remaining_annual_limit: remainingAnnualLimit,
+    caps_applied: {
+      medical_bill: Number(cappedMedical.toFixed(2)),
+      pharmacy_bill: Number(cappedPharmacy.toFixed(2)),
+      diagnostic_report: Number(cappedDiagnostic.toFixed(2)),
+      procedure: Number(cappedProcedure.toFixed(2)),
+      other: Number(cappedOther.toFixed(2)),
+      per_claim: Number(perClaimCapped.toFixed(2)),
+      annual: Number(annualCapped.toFixed(2)),
+    },
+  };
+}
+
+function normalizeApprovedAmount(adjudication, precheck) {
+  const calculated = calculateBackendApprovedAmount(adjudication, precheck);
+  const amountOnlyCodes = new Set([
+    'PER_CLAIM_EXCEEDED',
+    'BELOW_MIN_AMOUNT',
+    'AMOUNT_MISMATCH',
+    'CLAIM_AMOUNT_MISMATCH',
+    'CALCULATED_AMOUNT_MISMATCH',
+  ]);
+  const cleanedRejectionReasons = safeArray(adjudication.rejection_reasons).filter(
+    (reason) => !amountOnlyCodes.has(String(reason))
+  );
+
+  if (calculated.extracted_total <= 0 || calculated.category_eligible_total <= 0) {
+    return rejectWith(
+      adjudication,
+      'NO_CLAIMABLE_AMOUNT',
+      'Backend could not find any claimable bill amount from extracted documents.',
+      'amount_match',
+      [`extracted_total=${calculated.extracted_total}`]
+    );
+  }
+
+  if (calculated.minimum_claim_amount > 0 && calculated.approved_amount < calculated.minimum_claim_amount) {
+    return rejectWith(
+      adjudication,
+      'BELOW_MIN_AMOUNT',
+      `Calculated eligible amount is below minimum claim amount of ${calculated.minimum_claim_amount}.`,
+      'amount_match',
+      [`approved_amount=${calculated.approved_amount}`, `minimum_claim_amount=${calculated.minimum_claim_amount}`]
+    );
+  }
+
+  const limitCapped = calculated.approved_amount < calculated.category_eligible_total;
+  const hasRejectedItems =
+    safeArray(adjudication.rejected_items).length > 0 ||
+    safeArray(adjudication.non_claimable_procedures).length > 0 ||
+    cleanedRejectionReasons.length > 0;
+  const requestedAmount = toNumber(adjudication.claimed_amount_from_request);
+  const amountRemark = [
+    `Approved amount is ${calculated.approved_amount}.`,
+    `Extracted eligible amount before caps was ${Number(calculated.category_eligible_total.toFixed(2))}.`,
+    requestedAmount > 0 ? `Requested display amount was ${requestedAmount}.` : 'No requested display amount was used for decisioning.',
+    limitCapped ? 'Policy per-claim, annual, or sublimit cap was applied.' : 'Claim amount input was ignored for decisioning.',
+  ].join(' ');
+
+  return withGuardCheck(
+    {
+      ...adjudication,
+      decision: hasRejectedItems || limitCapped ? 'PARTIAL' : 'APPROVED',
+      rejection_reasons: cleanedRejectionReasons,
+      approved_amount: calculated.approved_amount,
+      calculated_claimable_amount: calculated.approved_amount,
+      total_extracted_bill_amount: calculated.extracted_total,
+      amount_consistency: {
+        ...(adjudication.amount_consistency || {}),
+        passed: true,
+        difference: requestedAmount > 0 ? Number((calculated.approved_amount - requestedAmount).toFixed(2)) : 0,
+        amount_relationship:
+          requestedAmount === 0
+            ? 'display_only_not_used'
+            : calculated.approved_amount === requestedAmount
+              ? 'same'
+              : calculated.approved_amount < requestedAmount
+                ? 'approved_less_than_display_amount'
+                : 'approved_more_than_display_amount',
+        amount_remark: amountRemark,
+        notes: 'Backend recalculated final approval from extracted document amounts. claim_amount input is display-only.',
+      },
+      deductions: {
+        ...(adjudication.deductions || {}),
+        limit_cap_amount: limitCapped
+          ? Number((calculated.category_eligible_total - calculated.approved_amount).toFixed(2))
+          : toNumber(adjudication.deductions?.limit_cap_amount),
+      },
+      tags: limitCapped ? addFlags(adjudication.tags, ['LIMIT_CAP']) : adjudication.tags || [],
+      backend_amount_recalculation: calculated,
+    },
+    'amount_match',
+    {
+      status: 'passed',
+      passed: true,
+      reason: 'claim_amount input is display-only. Backend approved amount was recalculated from extracted document amounts and policy caps.',
+      evidence_used: [
+        `extracted_total=${calculated.extracted_total}`,
+        `category_eligible_total=${calculated.category_eligible_total}`,
+        `approved_amount=${calculated.approved_amount}`,
+      ],
+      failure_code: null,
+    }
+  );
+}
+
+function isAmountOnlyRejection(adjudication) {
+  if (adjudication?.decision !== 'REJECTED') return false;
+
+  const amountOnlyCodes = new Set([
+    'PER_CLAIM_EXCEEDED',
+    'BELOW_MIN_AMOUNT',
+    'AMOUNT_MISMATCH',
+    'CLAIM_AMOUNT_MISMATCH',
+    'CALCULATED_AMOUNT_MISMATCH',
+  ]);
+  const reasons = safeArray(adjudication.rejection_reasons);
+
+  return reasons.length > 0 && reasons.every((reason) => amountOnlyCodes.has(String(reason)));
+}
+
 function applyPolicyGuard(adjudication, { precheck, extraction, claimInput }) {
-  if (!adjudication || !['APPROVED', 'PARTIAL'].includes(adjudication.decision)) {
+  if (!adjudication || (!['APPROVED', 'PARTIAL'].includes(adjudication.decision) && !isAmountOnlyRejection(adjudication))) {
     return adjudication;
   }
 
   const policy = precheck.policy || {};
-  const perClaimLimit = toNumber(policy.coverage_details?.per_claim_limit);
-  const requestedAmount = toNumber(claimInput.claim_amount);
-  const previousClaimsSameDay = toNumber(claimInput.previous_claims_same_day);
+  const previousAcceptedClaimsSameDay = toNumber(
+    claimInput.previous_accepted_claims_same_day || claimInput.accepted_claims_same_day
+  );
   const patientMatchResults = getDocumentPatients(extraction).map((patient) => ({
     patient,
     score: patientMatchScore(precheck.member, patient),
   }));
   const rejectedPatientMatches = patientMatchResults.filter((result) => patientMatchDecision(result.score.total_score) === 'REJECT');
-  const manualReviewPatientMatches = patientMatchResults.filter((result) => patientMatchDecision(result.score.total_score) === 'MANUAL_REVIEW');
 
   if (rejectedPatientMatches.length > 0) {
     return rejectWith(
       adjudication,
       'PATIENT_MISMATCH',
-      'Patient identity score is below 0.70 for one or more documents.',
+      'Patient identity score is below 0.60 for one or more documents.',
       'patient_match',
       rejectedPatientMatches.map((result) => JSON.stringify(result.score))
     );
   }
 
-  if (manualReviewPatientMatches.length > 0) {
-    return manualReviewWith(
-      adjudication,
-      ['PATIENT_MATCH_MANUAL_REVIEW'],
-      'Patient identity score is between 0.70 and 0.84 for one or more documents.',
-      'patient_match',
-      manualReviewPatientMatches.map((result) => JSON.stringify(result.score))
-    );
-  }
-
-  if (previousClaimsSameDay >= 2) {
+  if (previousAcceptedClaimsSameDay >= 1) {
     return manualReviewWith(
       adjudication,
       ['Multiple claims same day', 'Unusual pattern detected'],
-      'Multiple same-day claims were declared in the claim input, so this needs duplicate/fraud review.',
+      'One or more previously accepted same-day claims were declared in the claim input, so this needs duplicate/fraud review.',
       'fraud_or_manual_review_flags',
-      [`previous_claims_same_day=${previousClaimsSameDay}`]
+      [`previous_accepted_claims_same_day=${previousAcceptedClaimsSameDay}`]
     );
   }
 
@@ -351,16 +484,6 @@ function applyPolicyGuard(adjudication, { precheck, extraction, claimInput }) {
       'A prescription from a registered doctor is required to support OPD bill items.',
       'required_documents',
       ['prescriptions=0', 'bill_or_report_present=true']
-    );
-  }
-
-  if (perClaimLimit && requestedAmount > perClaimLimit) {
-    return rejectWith(
-      adjudication,
-      'PER_CLAIM_EXCEEDED',
-      `Claim amount exceeds per-claim limit of ${perClaimLimit}.`,
-      'amount_match',
-      [`claim_amount=${requestedAmount}`, `per_claim_limit=${perClaimLimit}`]
     );
   }
 
@@ -384,7 +507,7 @@ function applyPolicyGuard(adjudication, { precheck, extraction, claimInput }) {
     );
   }
 
-  return adjudication;
+  return normalizeApprovedAmount(adjudication, precheck);
 }
 
 module.exports = {

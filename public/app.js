@@ -178,6 +178,205 @@ function renderKeyValues(values) {
     .join('')}</div>`;
 }
 
+function compactValue(value) {
+  if (value === undefined || value === null || value === '') return 'Not found';
+  if (Array.isArray(value)) return value.length ? value.join(', ') : 'Not found';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return value;
+}
+
+function documentLabel(type, index) {
+  return `${type.replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase())} ${index + 1}`;
+}
+
+function getDocumentIdentityRows(extraction = {}) {
+  const documents = extraction.claim_extraction?.documents || extraction.documents || {};
+  const configs = [
+    {
+      key: 'prescriptions',
+      providerLabel: 'Clinic',
+      provider: (doc) => doc.clinic_info?.name,
+      date: (doc) => doc.clinical_details?.date,
+    },
+    {
+      key: 'medical_bills',
+      providerLabel: 'Hospital',
+      provider: (doc) => doc.hospital_info?.name,
+      date: (doc) => doc.bill_details?.date,
+    },
+    {
+      key: 'diagnostic_reports',
+      providerLabel: 'Lab',
+      provider: (doc) => doc.lab_info?.name,
+      date: (doc) => doc.report_details?.date,
+    },
+    {
+      key: 'pharmacy_bills',
+      providerLabel: 'Pharmacy',
+      provider: (doc) => doc.pharmacy_info?.name,
+      date: (doc) => doc.bill_details?.date,
+    },
+  ];
+
+  return configs.flatMap((config) =>
+    (documents[config.key] || []).map((doc, index) => ({
+      title: documentLabel(config.key, index),
+      patient: doc.patient_info || {},
+      providerLabel: config.providerLabel,
+      provider: config.provider(doc),
+      date: config.date(doc),
+      confidence: doc.data_quality?.overall_confidence_score,
+    }))
+  );
+}
+
+function renderIdentityPanels(result) {
+  const member = result?.precheck?.member;
+  const documentRows = getDocumentIdentityRows(result?.extraction);
+
+  if (!member && documentRows.length === 0) {
+    return '';
+  }
+
+  const dbCard = member
+    ? `
+      <article class="identity-card db-record">
+        <div class="identity-card-title">
+          <strong>Record Found User Data</strong>
+          <span>MongoDB</span>
+        </div>
+        ${renderKeyValues([
+          ['Member ID', compactValue(member.member_id)],
+          ['Name', compactValue(member.member_name)],
+          ['DOB', compactValue(member.date_of_birth)],
+          ['Age', compactValue(member.age_at_treatment)],
+          ['Gender', compactValue(member.gender)],
+          ['Type', compactValue(member.member_type)],
+        ])}
+      </article>
+    `
+    : '<p class="muted">No DB member record returned.</p>';
+
+  const documentCards = documentRows.length
+    ? documentRows
+        .map(
+          (row) => `
+            <article class="identity-card">
+              <div class="identity-card-title">
+                <strong>${escapeHtml(row.title)}</strong>
+                <span>${escapeHtml(row.confidence === undefined ? 'Confidence N/A' : `Confidence ${row.confidence}`)}</span>
+              </div>
+              ${renderKeyValues([
+                ['Name', compactValue(row.patient.name)],
+                ['DOB', compactValue(row.patient.date_of_birth)],
+                ['Age', compactValue(row.patient.age)],
+                ['Gender', compactValue(row.patient.gender)],
+                ['Date', compactValue(row.date)],
+                [row.providerLabel, compactValue(row.provider)],
+              ])}
+            </article>
+          `
+        )
+        .join('')
+    : '<p class="muted">No document patient data extracted.</p>';
+
+  return `
+    <section class="result-section">
+      <h3>Patient Identity</h3>
+      <div class="identity-grid">
+        ${dbCard}
+        ${documentCards}
+      </div>
+    </section>
+  `;
+}
+
+function humanLabel(value) {
+  return String(value)
+    .replaceAll('_', ' ')
+    .replaceAll('-', ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function primitiveDisplay(value) {
+  if (value === null) return 'null';
+  if (value === undefined || value === '') return 'Not found';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+}
+
+function renderHumanJson(value, label = 'Result', depth = 0) {
+  if (value === null || typeof value !== 'object') {
+    return `
+      <div class="detail-row">
+        <span>${escapeHtml(humanLabel(label))}</span>
+        <strong>${escapeHtml(primitiveDisplay(value))}</strong>
+      </div>
+    `;
+  }
+
+  if (Array.isArray(value)) {
+    return `
+      <details class="detail-group depth-${Math.min(depth, 3)}" open>
+        <summary>
+          <span>${escapeHtml(humanLabel(label))}</span>
+          <em>${value.length} item${value.length === 1 ? '' : 's'}</em>
+        </summary>
+        <div class="detail-body">
+          ${
+            value.length
+              ? value
+                  .map(
+                    (item, index) => `
+                      <article class="detail-item">
+                        ${renderHumanJson(item, `${humanLabel(label)} ${index + 1}`, depth + 1)}
+                      </article>
+                    `
+                  )
+                  .join('')
+              : '<p class="muted">Empty list</p>'
+          }
+        </div>
+      </details>
+    `;
+  }
+
+  const entries = Object.entries(value);
+  const primitiveEntries = entries.filter(([, item]) => item === null || typeof item !== 'object');
+  const nestedEntries = entries.filter(([, item]) => item !== null && typeof item === 'object');
+
+  return `
+    <details class="detail-group depth-${Math.min(depth, 3)}" open>
+      <summary>
+        <span>${escapeHtml(humanLabel(label))}</span>
+        <em>${entries.length} field${entries.length === 1 ? '' : 's'}</em>
+      </summary>
+      <div class="detail-body">
+        ${
+          primitiveEntries.length
+            ? `<div class="detail-rows">${primitiveEntries.map(([key, item]) => renderHumanJson(item, key, depth + 1)).join('')}</div>`
+            : ''
+        }
+        ${nestedEntries.map(([key, item]) => renderHumanJson(item, key, depth + 1)).join('')}
+        ${entries.length ? '' : '<p class="muted">Empty object</p>'}
+      </div>
+    </details>
+  `;
+}
+
+function renderCompleteJsonOutput(result) {
+  return `
+    <section class="result-section full-details-section">
+      <h3>Full Result Details</h3>
+      <p class="section-note">Every field from the API response is shown below in readable sections.</p>
+      <div class="detail-explorer">
+        ${renderHumanJson(result, 'API Response')}
+      </div>
+    </section>
+  `;
+}
+
 function renderCheckCards(checks = {}) {
   const entries = Object.entries(checks);
 
@@ -226,8 +425,155 @@ function renderProcedures(title, items = [], className = '') {
   `;
 }
 
+function getAmountBreakdown(result) {
+  const adjudication = result?.adjudication || {};
+  const backendBreakdown = adjudication.backend_amount_summary?.document_amount_breakdown;
+  const rawBreakdown = adjudication.document_amount_breakdown || backendBreakdown;
+  return rawBreakdown ? normalizeAmountBreakdown(rawBreakdown) : null;
+}
+
+function normalizeAmountBreakdown(rawBreakdown = {}) {
+  const emptyBucket = () => ({ total: 0, documents: [] });
+  const breakdown = {
+    prescription: rawBreakdown.prescription || emptyBucket(),
+    medical_bill: rawBreakdown.medical_bill || emptyBucket(),
+    pharmacy_bill: rawBreakdown.pharmacy_bill || emptyBucket(),
+    diagnostic_report: rawBreakdown.diagnostic_report || emptyBucket(),
+    procedure: rawBreakdown.procedure || emptyBucket(),
+    other: rawBreakdown.other || emptyBucket(),
+  };
+
+  if (!rawBreakdown.medical_bill && typeof rawBreakdown.medical_bill_total === 'number') {
+    breakdown.medical_bill.total = rawBreakdown.medical_bill_total;
+  }
+  if (!rawBreakdown.pharmacy_bill && typeof rawBreakdown.pharmacy_bill_total === 'number') {
+    breakdown.pharmacy_bill.total = rawBreakdown.pharmacy_bill_total;
+  }
+  if (!rawBreakdown.diagnostic_report && typeof rawBreakdown.diagnostic_bill_total === 'number') {
+    breakdown.diagnostic_report.total = rawBreakdown.diagnostic_bill_total;
+  }
+  if (!rawBreakdown.procedure && typeof rawBreakdown.procedure_total === 'number') {
+    breakdown.procedure.total = rawBreakdown.procedure_total;
+  }
+
+  return breakdown;
+}
+
+function normalizeDocumentType(value) {
+  const text = String(value || '').toLowerCase();
+  if (text.includes('prescription')) return 'prescription';
+  if (text.includes('pharmacy')) return 'pharmacy_bill';
+  if (text.includes('diagnostic') || text.includes('report') || text.includes('lab')) return 'diagnostic_report';
+  if (text.includes('procedure')) return 'procedure';
+  if (text.includes('medical') || text.includes('bill')) return 'medical_bill';
+  return 'other';
+}
+
+function bucketDisplayName(bucketKey) {
+  return {
+    prescription: 'Prescription',
+    medical_bill: 'Medical Bill',
+    pharmacy_bill: 'Pharmacy Bill',
+    diagnostic_report: 'Diagnostic Report',
+    procedure: 'Procedure',
+    other: 'Other',
+  }[bucketKey] || 'Document';
+}
+
+function getClaimableDocumentRows(result) {
+  const adjudication = result?.adjudication || {};
+  const breakdown = getAmountBreakdown(result);
+  const aiDocuments = adjudication.claimable_documents || [];
+  const reasonByType = new Map(
+    aiDocuments.map((document) => [
+      normalizeDocumentType(document.document_type || document.type || document.name),
+      document.reason || document.linked_treatment_or_procedure || '',
+    ])
+  );
+
+  if (!breakdown) {
+    return aiDocuments;
+  }
+
+  return Object.entries(breakdown).flatMap(([bucketKey, bucket]) => {
+    const documents = bucket.documents || [];
+
+    if (documents.length === 0) {
+      return [];
+    }
+
+    return documents.map((document) => ({
+      document_type: `${bucketDisplayName(bucketKey)} - ${document.name || bucketDisplayName(bucketKey)}`,
+      amount: document.amount,
+      reason: reasonByType.get(bucketKey) || `${bucketDisplayName(bucketKey)} amount extracted from document.`,
+      linked_treatment_or_procedure: (document.items || []).map((item) => item.name).filter(Boolean).join(', '),
+    }));
+  });
+}
+
+function renderAmountByDocument(result) {
+  const breakdown = getAmountBreakdown(result);
+
+  if (!breakdown) {
+    return '';
+  }
+
+  const buckets = [
+    ['Prescription', breakdown.prescription],
+    ['Medical Bill', breakdown.medical_bill],
+    ['Pharmacy Bill', breakdown.pharmacy_bill],
+    ['Diagnostic Report', breakdown.diagnostic_report],
+    ['Procedure', breakdown.procedure],
+    ['Other', breakdown.other],
+  ];
+
+  return `
+    <section class="result-section">
+      <h3>Amount By Document</h3>
+      <div class="amount-doc-grid">
+        ${buckets
+          .map(([label, bucket]) => {
+            const documents = bucket.documents || [];
+            return `
+              <article class="amount-doc-card">
+                <div class="amount-doc-title">
+                  <strong>${escapeHtml(label)}</strong>
+                  <span>${formatMoney(bucket.total)}</span>
+                </div>
+                ${
+                  documents.length
+                    ? `<div class="amount-doc-list">${documents
+                        .map(
+                          (document) => `
+                            <div class="amount-doc-entry">
+                              <div>
+                                <strong>${escapeHtml(document.name || label)}</strong>
+                                <span>${formatMoney(document.amount)}</span>
+                              </div>
+                              ${
+                                document.items?.length
+                                  ? `<ul>${document.items
+                                      .map((item) => `<li><span>${escapeHtml(item.name || 'Item')}</span><b>${formatMoney(item.amount)}</b></li>`)
+                                      .join('')}</ul>`
+                                  : ''
+                              }
+                            </div>
+                          `
+                        )
+                        .join('')}</div>`
+                    : '<p class="muted">No amount found</p>'
+                }
+              </article>
+            `;
+          })
+          .join('')}
+      </div>
+    </section>
+  `;
+}
+
 function renderResultView(result) {
-  if (!result || Object.keys(result).length === 0 || result.status) {
+  if (!result || Object.keys(result).length === 0) {
     resultView.innerHTML = '<p class="empty-state">Submit a claim to see the adjudication summary.</p>';
     return;
   }
@@ -257,13 +603,16 @@ function renderResultView(result) {
     </section>
 
     ${renderKeyValues([
-      ['Requested', formatMoney(adjudication.claimed_amount_from_request || amountSummary.claimed_amount_from_request || precheck.claim?.claim_amount)],
+      ['Display amount', formatMoney(adjudication.claimed_amount_from_request || amountSummary.claimed_amount_from_request || precheck.claim?.claim_amount)],
       ['Approved', formatMoney(adjudication.approved_amount)],
       ['Calculated', formatMoney(adjudication.calculated_claimable_amount || amountSummary.total_extracted_bill_amount)],
       ['Treatment date', result.inferred_treatment_date?.treatment_date || precheck.claim?.treatment_date || 'Unknown'],
       ['Submission date', precheck.claim?.submission_date || 'Not provided'],
       ['Utilization updated', result.utilization_updated ? 'Yes' : 'No'],
     ])}
+
+    ${renderIdentityPanels(result)}
+    ${renderAmountByDocument(result)}
 
     <section class="result-section">
       <h3>Reasons, Flags, Warnings</h3>
@@ -277,12 +626,14 @@ function renderResultView(result) {
 
     ${renderProcedures('Claimable Items / Procedures', adjudication.claimable_procedures || adjudication.covered_items || [], 'good')}
     ${renderProcedures('Rejected / Non-Claimable Items', adjudication.non_claimable_procedures || adjudication.rejected_items || [], 'bad')}
-    ${renderProcedures('Claimable Documents', adjudication.claimable_documents || [], 'neutral')}
+    ${renderProcedures('Claimable Documents', getClaimableDocumentRows(result), 'neutral')}
 
     <section class="result-section">
       <h3>Checks</h3>
       ${renderCheckCards(adjudication.checks || (precheck.decision ? { preliminary_eligibility: precheck } : {}))}
     </section>
+
+    ${renderCompleteJsonOutput(result)}
   `;
 }
 
@@ -497,7 +848,7 @@ form.addEventListener('submit', async (event) => {
 
   formData.append('member_id', memberIdInput.value.trim());
   formData.append('member_name', memberNameInput.value.trim());
-  formData.append('claim_amount', claimAmountInput.value.trim());
+  formData.append('claim_amount', claimAmountInput.value.trim() || '0');
   formData.append('adjudication_mode', adjudicationModeInput.value);
 
   if (submissionDateInput.value) {
