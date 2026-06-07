@@ -25,21 +25,27 @@ function textPart(filename, text) {
   };
 }
 
+function packageDirectoryPath(packagePath) {
+  return `${path.dirname(require.resolve(packagePath))}${path.sep}`;
+}
+
 async function renderPdfPagesToImageParts(file) {
   const pdfWorker = await import('pdfjs-dist/legacy/build/pdf.worker.mjs');
 
   globalThis.pdfjsWorker = pdfWorker;
 
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const standardFontDataUrl = packageDirectoryPath('pdfjs-dist/standard_fonts/LiberationSans-Regular.ttf');
   const configuredMaxPages = Number(process.env.PDF_MAX_PAGES || 20);
   const maxPages = Math.max(configuredMaxPages, 20);
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(file.buffer),
     disableWorker: true,
-    disableFontFace: false,
-    useSystemFonts: true,
+    disableFontFace: true,
+    useSystemFonts: false,
     useWorkerFetch: false,
     isEvalSupported: false,
+    standardFontDataUrl,
   });
   const pdf = await loadingTask.promise;
   const pageCount = Math.min(pdf.numPages, maxPages);
@@ -54,6 +60,10 @@ async function renderPdfPagesToImageParts(file) {
     await page.render({ canvasContext, viewport }).promise;
 
     const imageBuffer = canvas.toBuffer('image/jpeg', 0.9);
+    parts.push({
+      type: 'text',
+      text: `Document: ${file.originalname}, page ${pageNumber} of ${pdf.numPages}`,
+    });
     parts.push({
       type: 'image_url',
       image_url: {
