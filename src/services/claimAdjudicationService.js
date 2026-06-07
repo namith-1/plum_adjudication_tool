@@ -272,7 +272,8 @@ function summarizeExtractedAmounts(extraction, requestedClaimAmount) {
 
   return {
     claimed_amount_from_request: requestedAmount,
-    claim_amount_is_display_only: true,
+    requested_amount: requestedAmount,
+    claim_amount_is_requested_amount: true,
     medical_bill_total: medicalBillTotal,
     pharmacy_bill_total: pharmacyBillTotal,
     diagnostic_bill_total: documentAmountBreakdown.diagnostic_report.total,

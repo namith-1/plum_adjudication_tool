@@ -275,7 +275,7 @@ async function runClaimPrecheck(input) {
         policy: policy.toObject ? policy.toObject() : policy,
         claim: {
           claim_amount: claimAmount,
-          claim_amount_display_only: true,
+          claim_amount_is_requested_amount: true,
           treatment_date: formatDate(treatmentDate),
           previous_medical_conditions: knownConditions,
           submission_date: formatDate(submissionDate),
@@ -351,7 +351,7 @@ async function runClaimPrecheck(input) {
     policy: policy.toObject ? policy.toObject() : policy,
     claim: {
       claim_amount: claimAmount,
-      claim_amount_display_only: true,
+      claim_amount_is_requested_amount: true,
       treatment_date: formatDate(treatmentDate),
       previous_medical_conditions: knownConditions,
       submission_date: formatDate(submissionDate),

@@ -290,12 +290,18 @@ function getBackendAmountSummary(adjudication) {
   return adjudication.backend_amount_summary || {};
 }
 
-function calculateBackendApprovedAmount(adjudication, precheck) {
+function calculateBackendApprovedAmount(adjudication, precheck, claimInput = {}) {
   const summary = getBackendAmountSummary(adjudication);
   const breakdown = summary.document_amount_breakdown || adjudication.document_amount_breakdown || {};
   const coverage = precheck.policy?.coverage_details || {};
   const claimRequirements = precheck.policy?.claim_requirements || {};
   const utilization = precheck.user_policy?.utilization || {};
+  const requestedAmount = toNumber(
+    claimInput.claim_amount ??
+      precheck.claim?.claim_amount ??
+      adjudication.claimed_amount_from_request ??
+      summary.claimed_amount_from_request
+  );
 
   const medicalTotal = toNumber(breakdown.medical_bill?.total ?? summary.medical_bill_total);
   const pharmacyTotal = toNumber(breakdown.pharmacy_bill?.total ?? summary.pharmacy_bill_total);
@@ -312,16 +318,31 @@ function calculateBackendApprovedAmount(adjudication, precheck) {
   const perClaimCapped = capAmount(categoryEligibleTotal, coverage.per_claim_limit);
   const remainingAnnualLimit = Math.max(toNumber(coverage.annual_limit) - toNumber(utilization.total_claimed_amount_ytd), 0);
   const annualCapped = remainingAnnualLimit > 0 ? Math.min(perClaimCapped, remainingAnnualLimit) : perClaimCapped;
+  const policyCappedAmount = annualCapped;
+  const finalApprovedAmount = requestedAmount > 0 ? Math.min(policyCappedAmount, requestedAmount) : policyCappedAmount;
   const minimumClaimAmount = toNumber(claimRequirements.minimum_claim_amount);
+  const sublimitCapped = cappedMedical < medicalTotal || cappedPharmacy < pharmacyTotal || cappedDiagnostic < diagnosticTotal;
+  const perClaimCappedApplied = perClaimCapped < categoryEligibleTotal;
+  const annualCappedApplied = annualCapped < perClaimCapped;
+  const requestedCapped = requestedAmount > 0 && requestedAmount < policyCappedAmount;
+  const requestedExceedsClaimable = requestedAmount > 0 && requestedAmount > policyCappedAmount;
 
   return {
     extracted_total: medicalTotal + pharmacyTotal + diagnosticTotal + procedureTotal + otherTotal,
     category_eligible_total: categoryEligibleTotal,
-    approved_amount: Number(annualCapped.toFixed(2)),
+    policy_capped_amount: Number(policyCappedAmount.toFixed(2)),
+    requested_amount: requestedAmount,
+    approved_amount: Number(finalApprovedAmount.toFixed(2)),
     minimum_claim_amount: minimumClaimAmount,
     per_claim_limit: toNumber(coverage.per_claim_limit),
     annual_limit: toNumber(coverage.annual_limit),
     remaining_annual_limit: remainingAnnualLimit,
+    requested_capped: requestedCapped,
+    requested_exceeds_claimable: requestedExceedsClaimable,
+    limit_capped: sublimitCapped || perClaimCappedApplied || annualCappedApplied,
+    sublimit_capped: sublimitCapped,
+    per_claim_capped: perClaimCappedApplied,
+    annual_capped: annualCappedApplied,
     caps_applied: {
       medical_bill: Number(cappedMedical.toFixed(2)),
       pharmacy_bill: Number(cappedPharmacy.toFixed(2)),
@@ -334,8 +355,8 @@ function calculateBackendApprovedAmount(adjudication, precheck) {
   };
 }
 
-function normalizeApprovedAmount(adjudication, precheck) {
-  const calculated = calculateBackendApprovedAmount(adjudication, precheck);
+function normalizeApprovedAmount(adjudication, precheck, claimInput = {}) {
+  const calculated = calculateBackendApprovedAmount(adjudication, precheck, claimInput);
   const amountOnlyCodes = new Set([
     'PER_CLAIM_EXCEEDED',
     'BELOW_MIN_AMOUNT',
@@ -367,47 +388,58 @@ function normalizeApprovedAmount(adjudication, precheck) {
     );
   }
 
-  const limitCapped = calculated.approved_amount < calculated.category_eligible_total;
+  const limitCapped = calculated.limit_capped;
+  const requestedExceedsClaimable = calculated.requested_exceeds_claimable;
   const hasRejectedItems =
     safeArray(adjudication.rejected_items).length > 0 ||
     safeArray(adjudication.non_claimable_procedures).length > 0 ||
     cleanedRejectionReasons.length > 0;
-  const requestedAmount = toNumber(adjudication.claimed_amount_from_request);
+  const requestedAmount = calculated.requested_amount;
   const amountRemark = [
     `Approved amount is ${calculated.approved_amount}.`,
-    `Extracted eligible amount before caps was ${Number(calculated.category_eligible_total.toFixed(2))}.`,
-    requestedAmount > 0 ? `Requested display amount was ${requestedAmount}.` : 'No requested display amount was used for decisioning.',
-    limitCapped ? 'Policy per-claim, annual, or sublimit cap was applied.' : 'Claim amount input was ignored for decisioning.',
-  ].join(' ');
+    `Requested amount was ${requestedAmount}.`,
+    `Document claimable amount before policy/request caps was ${Number(calculated.category_eligible_total.toFixed(2))}.`,
+    `Policy-capped claimable amount was ${calculated.policy_capped_amount}.`,
+    requestedExceedsClaimable ? 'Requested amount was higher than the claimable amount, so the claim is partial.' : null,
+    calculated.requested_capped ? 'Requested amount was lower than the claimable amount, so approval is limited to the requested amount.' : null,
+    limitCapped ? 'Policy per-claim, annual, or sublimit cap was applied.' : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return withGuardCheck(
     {
       ...adjudication,
-      decision: hasRejectedItems || limitCapped ? 'PARTIAL' : 'APPROVED',
+      decision: hasRejectedItems || limitCapped || requestedExceedsClaimable ? 'PARTIAL' : 'APPROVED',
       rejection_reasons: cleanedRejectionReasons,
+      claimed_amount_from_request: requestedAmount,
+      requested_amount: requestedAmount,
       approved_amount: calculated.approved_amount,
-      calculated_claimable_amount: calculated.approved_amount,
+      calculated_claimable_amount: Number(calculated.category_eligible_total.toFixed(2)),
       total_extracted_bill_amount: calculated.extracted_total,
       amount_consistency: {
         ...(adjudication.amount_consistency || {}),
         passed: true,
-        difference: requestedAmount > 0 ? Number((calculated.approved_amount - requestedAmount).toFixed(2)) : 0,
+        difference: requestedAmount > 0 ? Number((calculated.category_eligible_total - requestedAmount).toFixed(2)) : 0,
         amount_relationship:
           requestedAmount === 0
-            ? 'display_only_not_used'
-            : calculated.approved_amount === requestedAmount
+            ? 'requested_amount_missing'
+            : calculated.category_eligible_total === requestedAmount
               ? 'same'
-              : calculated.approved_amount < requestedAmount
-                ? 'approved_less_than_display_amount'
-                : 'approved_more_than_display_amount',
+              : calculated.category_eligible_total < requestedAmount
+                ? 'claimable_less_than_requested'
+                : 'claimable_more_than_requested',
         amount_remark: amountRemark,
-        notes: 'Backend recalculated final approval from extracted document amounts. claim_amount input is display-only.',
+        notes: 'Backend recalculated final approval as min(requested amount, document claimable amount, policy caps, annual remaining limit).',
       },
       deductions: {
         ...(adjudication.deductions || {}),
-        limit_cap_amount: limitCapped
-          ? Number((calculated.category_eligible_total - calculated.approved_amount).toFixed(2))
+        limit_cap_amount: calculated.policy_capped_amount < calculated.category_eligible_total
+          ? Number((calculated.category_eligible_total - calculated.policy_capped_amount).toFixed(2))
           : toNumber(adjudication.deductions?.limit_cap_amount),
+        requested_amount_cap: calculated.requested_capped
+          ? Number((calculated.policy_capped_amount - calculated.approved_amount).toFixed(2))
+          : toNumber(adjudication.deductions?.requested_amount_cap),
       },
       tags: limitCapped ? addFlags(adjudication.tags, ['LIMIT_CAP']) : adjudication.tags || [],
       backend_amount_recalculation: calculated,
@@ -416,10 +448,12 @@ function normalizeApprovedAmount(adjudication, precheck) {
     {
       status: 'passed',
       passed: true,
-      reason: 'claim_amount input is display-only. Backend approved amount was recalculated from extracted document amounts and policy caps.',
+      reason: 'Backend approved amount was recalculated as min(requested amount, extracted claimable amount, policy caps, and annual remaining limit).',
       evidence_used: [
+        `requested_amount=${requestedAmount}`,
         `extracted_total=${calculated.extracted_total}`,
         `category_eligible_total=${calculated.category_eligible_total}`,
+        `policy_capped_amount=${calculated.policy_capped_amount}`,
         `approved_amount=${calculated.approved_amount}`,
       ],
       failure_code: null,
@@ -507,7 +541,7 @@ function applyPolicyGuard(adjudication, { precheck, extraction, claimInput }) {
     );
   }
 
-  return normalizeApprovedAmount(adjudication, precheck);
+  return normalizeApprovedAmount(adjudication, precheck, claimInput);
 }
 
 module.exports = {

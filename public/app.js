@@ -603,7 +603,7 @@ function renderResultView(result) {
     </section>
 
     ${renderKeyValues([
-      ['Display amount', formatMoney(adjudication.claimed_amount_from_request || amountSummary.claimed_amount_from_request || precheck.claim?.claim_amount)],
+      ['Requested', formatMoney(adjudication.requested_amount || adjudication.claimed_amount_from_request || amountSummary.requested_amount || amountSummary.claimed_amount_from_request || precheck.claim?.claim_amount)],
       ['Approved', formatMoney(adjudication.approved_amount)],
       ['Calculated', formatMoney(adjudication.calculated_claimable_amount || amountSummary.total_extracted_bill_amount)],
       ['Treatment date', result.inferred_treatment_date?.treatment_date || precheck.claim?.treatment_date || 'Unknown'],
