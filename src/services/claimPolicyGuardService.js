@@ -12,6 +12,44 @@ function textIncludesAny(value, terms) {
   return terms.some((term) => text.includes(term));
 }
 
+function normalizeName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function nameTokens(value) {
+  return normalizeName(value)
+    .split(' ')
+    .filter((token) => token.length > 1);
+}
+
+function namesMatchStrict(dbName, documentName) {
+  const dbTokens = nameTokens(dbName);
+  const documentTokens = nameTokens(documentName);
+
+  if (dbTokens.length === 0 || documentTokens.length === 0) {
+    return true;
+  }
+
+  const dbFirst = dbTokens[0];
+  const documentFirst = documentTokens[0];
+  const dbLast = dbTokens.length > 1 ? dbTokens[dbTokens.length - 1] : null;
+  const documentLast = documentTokens.length > 1 ? documentTokens[documentTokens.length - 1] : null;
+
+  if (dbFirst !== documentFirst) {
+    return false;
+  }
+
+  if (dbLast && documentLast && dbLast !== documentLast) {
+    return false;
+  }
+
+  return true;
+}
+
 function getDocuments(extraction) {
   return extraction?.claim_extraction?.documents || {};
 }
@@ -22,6 +60,18 @@ function getBillItems(extraction) {
     ...safeArray(documents.medical_bills).flatMap((bill) => safeArray(bill.line_items)),
     ...safeArray(documents.pharmacy_bills).flatMap((bill) => safeArray(bill.line_items)),
   ];
+}
+
+function getPatientNames(extraction) {
+  const documents = getDocuments(extraction);
+
+  return [
+    ...safeArray(documents.prescriptions).map((doc) => doc.patient_info?.name),
+    ...safeArray(documents.medical_bills).map((doc) => doc.patient_info?.name),
+    ...safeArray(documents.diagnostic_reports).map((doc) => doc.patient_info?.name),
+    ...safeArray(documents.pharmacy_bills).map((doc) => doc.patient_info?.name),
+    extraction?.claim_extraction?.summary?.consistent_patient_name,
+  ].filter((name) => String(name || '').trim());
 }
 
 function addReason(reasons, reason) {
@@ -112,6 +162,18 @@ function applyPolicyGuard(adjudication, { precheck, extraction, claimInput }) {
   const perClaimLimit = toNumber(policy.coverage_details?.per_claim_limit);
   const requestedAmount = toNumber(claimInput.claim_amount);
   const previousClaimsSameDay = toNumber(claimInput.previous_claims_same_day);
+  const dbMemberName = precheck.member?.member_name;
+  const mismatchedPatientNames = getPatientNames(extraction).filter((name) => !namesMatchStrict(dbMemberName, name));
+
+  if (mismatchedPatientNames.length > 0) {
+    return rejectWith(
+      adjudication,
+      'PATIENT_MISMATCH',
+      'Patient name in one or more documents does not match the covered member name.',
+      'patient_match',
+      [`db_member_name=${dbMemberName}`, `document_patient_names=${mismatchedPatientNames.join(', ')}`]
+    );
+  }
 
   if (previousClaimsSameDay >= 2) {
     return manualReviewWith(
