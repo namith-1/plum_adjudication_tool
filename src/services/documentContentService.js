@@ -40,7 +40,19 @@ function getPdfToImgAssetUrls() {
   };
 }
 
+function ensurePdfDomGlobals() {
+  const canvas = require('@napi-rs/canvas');
+  const globals = ['DOMMatrix', 'DOMPoint', 'DOMRect', 'ImageData', 'Path2D'];
+
+  for (const key of globals) {
+    if (!globalThis[key] && canvas[key]) {
+      globalThis[key] = canvas[key];
+    }
+  }
+}
+
 async function renderPdfPagesToImageParts(file) {
+  ensurePdfDomGlobals();
   const { pdf } = await import('pdf-to-img');
   const configuredMaxPages = Number(process.env.PDF_MAX_PAGES || 20);
   const maxPages = Math.max(configuredMaxPages, 20);
