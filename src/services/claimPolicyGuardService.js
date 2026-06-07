@@ -26,29 +26,168 @@ function nameTokens(value) {
     .filter((token) => token.length > 1);
 }
 
-function namesMatchStrict(dbName, documentName) {
-  const dbTokens = nameTokens(dbName);
-  const documentTokens = nameTokens(documentName);
+function jaroWinkler(left, right) {
+  const s1 = normalizeName(left).replace(/\s/g, '');
+  const s2 = normalizeName(right).replace(/\s/g, '');
 
-  if (dbTokens.length === 0 || documentTokens.length === 0) {
-    return true;
+  if (!s1 && !s2) return 1;
+  if (!s1 || !s2) return 0;
+  if (s1 === s2) return 1;
+
+  const matchDistance = Math.max(Math.floor(Math.max(s1.length, s2.length) / 2) - 1, 0);
+  const s1Matches = new Array(s1.length).fill(false);
+  const s2Matches = new Array(s2.length).fill(false);
+  let matches = 0;
+
+  for (let i = 0; i < s1.length; i += 1) {
+    const start = Math.max(0, i - matchDistance);
+    const end = Math.min(i + matchDistance + 1, s2.length);
+
+    for (let j = start; j < end; j += 1) {
+      if (s2Matches[j] || s1[i] !== s2[j]) {
+        continue;
+      }
+
+      s1Matches[i] = true;
+      s2Matches[j] = true;
+      matches += 1;
+      break;
+    }
   }
 
-  const dbFirst = dbTokens[0];
-  const documentFirst = documentTokens[0];
-  const dbLast = dbTokens.length > 1 ? dbTokens[dbTokens.length - 1] : null;
-  const documentLast = documentTokens.length > 1 ? documentTokens[documentTokens.length - 1] : null;
+  if (matches === 0) return 0;
 
-  if (dbFirst !== documentFirst) {
-    return false;
+  let transpositions = 0;
+  let cursor = 0;
+
+  for (let i = 0; i < s1.length; i += 1) {
+    if (!s1Matches[i]) {
+      continue;
+    }
+
+    while (!s2Matches[cursor]) {
+      cursor += 1;
+    }
+
+    if (s1[i] !== s2[cursor]) {
+      transpositions += 1;
+    }
+
+    cursor += 1;
   }
 
-  if (dbLast && documentLast && dbLast !== documentLast) {
-    return false;
-  }
+  const jaro =
+    (matches / s1.length + matches / s2.length + (matches - transpositions / 2) / matches) / 3;
+  const prefixLength = Math.min(
+    4,
+    [...s1].findIndex((char, index) => char !== s2[index]) === -1
+      ? Math.min(s1.length, s2.length)
+      : [...s1].findIndex((char, index) => char !== s2[index])
+  );
 
-  return true;
+  return jaro + prefixLength * 0.1 * (1 - jaro);
 }
+
+function splitName(value) {
+  const tokens = nameTokens(value);
+
+  return {
+    first: tokens[0] || '',
+    last: tokens.length > 1 ? tokens[tokens.length - 1] : '',
+  };
+}
+
+function normalizeGender(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+
+  if (['m', 'male', 'man'].includes(normalized)) return 'M';
+  if (['f', 'female', 'woman'].includes(normalized)) return 'F';
+  if (['o', 'other', 'non-binary', 'nonbinary'].includes(normalized)) return 'O';
+  return 'U';
+}
+
+function normalizeDate(value) {
+  if (!value) return null;
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  const raw = String(value).trim();
+  const iso = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  const dayFirst = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+
+  if (iso) {
+    return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}`;
+  }
+
+  if (dayFirst) {
+    return `${dayFirst[3]}-${dayFirst[2].padStart(2, '0')}-${dayFirst[1].padStart(2, '0')}`;
+  }
+
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+}
+
+function dobScore(left, right) {
+  const leftDate = normalizeDate(left);
+  const rightDate = normalizeDate(right);
+
+  if (!leftDate || !rightDate) return 0.5;
+  if (leftDate === rightDate) return 1;
+
+  const [leftYear, leftMonth, leftDay] = leftDate.split('-');
+  const [rightYear, rightMonth, rightDay] = rightDate.split('-');
+
+  if (leftYear === rightYear && leftMonth === rightDay && leftDay === rightMonth) {
+    return 0.8;
+  }
+
+  return 0;
+}
+
+function genderScore(left, right) {
+  const leftGender = normalizeGender(left);
+  const rightGender = normalizeGender(right);
+
+  if (leftGender === 'U' || rightGender === 'U') return 0.5;
+  return leftGender === rightGender ? 1 : 0;
+}
+
+function patientMatchScore(dbMember, documentPatient) {
+  const dbName = splitName(dbMember?.member_name);
+  const docName = splitName(documentPatient?.name);
+  const firstNameScore = dbName.first && docName.first ? jaroWinkler(dbName.first, docName.first) : 0.5;
+  const lastNameScore = dbName.last && docName.last ? jaroWinkler(dbName.last, docName.last) : 0.5;
+  const dateOfBirthScore = dobScore(dbMember?.date_of_birth, documentPatient?.date_of_birth || documentPatient?.dob);
+  const sexScore = genderScore(dbMember?.gender, documentPatient?.gender);
+  const totalScore =
+    firstNameScore * 0.2 +
+    lastNameScore * 0.3 +
+    dateOfBirthScore * 0.4 +
+    sexScore * 0.1;
+
+  return {
+    first_name_score: Number(firstNameScore.toFixed(3)),
+    last_name_score: Number(lastNameScore.toFixed(3)),
+    dob_score: Number(dateOfBirthScore.toFixed(3)),
+    gender_score: Number(sexScore.toFixed(3)),
+    total_score: Number(totalScore.toFixed(3)),
+    db_member_name: dbMember?.member_name || null,
+    document_patient_name: documentPatient?.name || null,
+    db_dob: normalizeDate(dbMember?.date_of_birth),
+    document_dob: normalizeDate(documentPatient?.date_of_birth || documentPatient?.dob),
+    db_gender: normalizeGender(dbMember?.gender),
+    document_gender: normalizeGender(documentPatient?.gender),
+  };
+}
+
+function patientMatchDecision(score) {
+  if (score >= 0.85) return 'PASS';
+  if (score >= 0.7) return 'MANUAL_REVIEW';
+  return 'REJECT';
+}
+
 
 function getDocuments(extraction) {
   return extraction?.claim_extraction?.documents || {};
@@ -62,16 +201,22 @@ function getBillItems(extraction) {
   ];
 }
 
-function getPatientNames(extraction) {
+function getDocumentPatients(extraction) {
   const documents = getDocuments(extraction);
+  const structuredPatients = [
+    ...safeArray(documents.prescriptions).map((doc) => doc.patient_info),
+    ...safeArray(documents.medical_bills).map((doc) => doc.patient_info),
+    ...safeArray(documents.diagnostic_reports).map((doc) => doc.patient_info),
+    ...safeArray(documents.pharmacy_bills).map((doc) => doc.patient_info),
+  ].filter((patient) => String(patient?.name || '').trim());
 
-  return [
-    ...safeArray(documents.prescriptions).map((doc) => doc.patient_info?.name),
-    ...safeArray(documents.medical_bills).map((doc) => doc.patient_info?.name),
-    ...safeArray(documents.diagnostic_reports).map((doc) => doc.patient_info?.name),
-    ...safeArray(documents.pharmacy_bills).map((doc) => doc.patient_info?.name),
-    extraction?.claim_extraction?.summary?.consistent_patient_name,
-  ].filter((name) => String(name || '').trim());
+  if (structuredPatients.length > 0) {
+    return structuredPatients;
+  }
+
+  return [{ name: extraction?.claim_extraction?.summary?.consistent_patient_name }].filter((patient) =>
+    String(patient?.name || '').trim()
+  );
 }
 
 function addReason(reasons, reason) {
@@ -162,16 +307,30 @@ function applyPolicyGuard(adjudication, { precheck, extraction, claimInput }) {
   const perClaimLimit = toNumber(policy.coverage_details?.per_claim_limit);
   const requestedAmount = toNumber(claimInput.claim_amount);
   const previousClaimsSameDay = toNumber(claimInput.previous_claims_same_day);
-  const dbMemberName = precheck.member?.member_name;
-  const mismatchedPatientNames = getPatientNames(extraction).filter((name) => !namesMatchStrict(dbMemberName, name));
+  const patientMatchResults = getDocumentPatients(extraction).map((patient) => ({
+    patient,
+    score: patientMatchScore(precheck.member, patient),
+  }));
+  const rejectedPatientMatches = patientMatchResults.filter((result) => patientMatchDecision(result.score.total_score) === 'REJECT');
+  const manualReviewPatientMatches = patientMatchResults.filter((result) => patientMatchDecision(result.score.total_score) === 'MANUAL_REVIEW');
 
-  if (mismatchedPatientNames.length > 0) {
+  if (rejectedPatientMatches.length > 0) {
     return rejectWith(
       adjudication,
       'PATIENT_MISMATCH',
-      'Patient name in one or more documents does not match the covered member name.',
+      'Patient identity score is below 0.70 for one or more documents.',
       'patient_match',
-      [`db_member_name=${dbMemberName}`, `document_patient_names=${mismatchedPatientNames.join(', ')}`]
+      rejectedPatientMatches.map((result) => JSON.stringify(result.score))
+    );
+  }
+
+  if (manualReviewPatientMatches.length > 0) {
+    return manualReviewWith(
+      adjudication,
+      ['PATIENT_MATCH_MANUAL_REVIEW'],
+      'Patient identity score is between 0.70 and 0.84 for one or more documents.',
+      'patient_match',
+      manualReviewPatientMatches.map((result) => JSON.stringify(result.score))
     );
   }
 

@@ -17,8 +17,15 @@ STRICT RULES
   - normal: focus on the claim checks represented in the test cases: member/patient match, treatment and submission dates, active coverage, waiting period, per-claim/annual limits, missing prescription/supporting documents, pre-auth for high-value MRI/CT, covered vs excluded procedures, amount calculation, duplicate/same-day claim risk, and clear/legible documents.
   - strict: missing/weak authenticity markers can trigger MANUAL_REVIEW.
   - In both modes, still enforce core fields such as patient name, provider name, document date, bill amount/line items, medicine/test/procedure identity, and treatment support.
-- Match patient names across documents to DB member name using strict normalized matching only. Ignore case, extra spaces, punctuation, and harmless initials, but do not accept different first names or different last names. Examples: "Rajesh Kumar" and "Rajesh K." can match; "Rajesh Kumar" and "Rohan Gupta" must fail with PATIENT_MISMATCH. Do not use loose fuzzy matching.
-- Gender must match when both DB gender and document gender are available. If gender conflicts, fail patient_match and use PATIENT_MISMATCH. If DB gender or document gender is missing, mark gender_match as "unknown", not failed.
+- Match patient identity using weighted Name + DOB + Gender scoring:
+  - Standardize strings by lowercasing, removing punctuation, and trimming spaces.
+  - Score first and last name separately with Jaro-Winkler.
+  - Score DOB as 1.0 for exact match, 0.8 for day/month transposition, 0.0 for different DOB, and 0.5 when missing/unknown.
+  - Score gender as 1.0 for exact match, 0.0 for mismatch, and 0.5 when one side is unknown.
+  - Composite score = first_name * 0.20 + last_name * 0.30 + DOB * 0.40 + gender * 0.10.
+  - If score >= 0.85, patient_match passes. If score is 0.70 to 0.84, return MANUAL_REVIEW. If score < 0.70, reject with PATIENT_MISMATCH.
+  - Example: "Rajesh Kumar" vs "Rohan Gupta" must fail unless DOB/gender evidence somehow proves otherwise, and should normally be PATIENT_MISMATCH.
+- Gender must match when both DB gender and document gender are available. If gender conflicts, include it in patient_match scoring and explain the mismatch.
 - Age can differ by up to 5 years from DB age_at_treatment. If document age is outside +/- 5 years, fail patient_match and use PATIENT_MISMATCH. If DB age_at_treatment or document age is missing, mark age_match as "unknown", not failed.
 - Check all document dates against treatment_date. Prescription, bills, pharmacy, and reports should be on or close to treatment date. If dates are far apart or inconsistent, flag DATE_MISMATCH.
 - Check prescription/treatment/diagnosis against policy coverage and exclusions.
