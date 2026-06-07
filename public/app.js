@@ -12,6 +12,7 @@ const submitButton = document.getElementById('submitButton');
 const clearButton = document.getElementById('clearButton');
 const copyButton = document.getElementById('copyButton');
 const downloadButton = document.getElementById('downloadButton');
+const downloadSummaryButton = document.getElementById('downloadSummaryButton');
 const saveManualReviewButton = document.getElementById('saveManualReviewButton');
 const fileList = document.getElementById('fileList');
 const output = document.getElementById('output');
@@ -114,6 +115,37 @@ function formatMoney(value) {
 
 function getFinalDecision(result) {
   return result?.adjudication?.decision || result?.precheck?.decision || result?.status || 'PENDING';
+}
+
+function getResultSummary(result) {
+  const adjudication = result?.adjudication || {};
+  const precheck = result?.precheck || {};
+  const source = adjudication.decision ? adjudication : precheck;
+
+  return {
+    claim_id: result?.claim_id || source.claim_id || 'CLM_XXXXX',
+    decision: getFinalDecision(result),
+    approved_amount: Number(adjudication.approved_amount || 0),
+    rejection_reasons: source.rejection_reasons || [],
+    confidence_score:
+      typeof source.confidence_score === 'number'
+        ? source.confidence_score
+        : source.decision === 'PRELIMINARY_ELIGIBILITY_PASSED'
+          ? 1
+          : 0,
+    notes: source.notes || adjudication.amount_consistency?.amount_remark || 'Additional observations',
+    next_steps: source.next_steps || (source.decision === 'APPROVED' ? 'Claim approved. No further action required.' : ''),
+  };
+}
+
+function downloadJsonFile(fileName, value) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function decisionClass(decision) {
@@ -395,14 +427,13 @@ copyButton.addEventListener('click', async () => {
 });
 
 downloadButton.addEventListener('click', () => {
-  const blob = new Blob([output.textContent], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `claim-result-${Date.now()}.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  downloadJsonFile(`claim-result-full-${Date.now()}.json`, latestResult || {});
   setStatus('Downloaded', 'success');
+});
+
+downloadSummaryButton.addEventListener('click', () => {
+  downloadJsonFile(`claim-result-summary-${Date.now()}.json`, getResultSummary(latestResult || {}));
+  setStatus('Summary downloaded', 'success');
 });
 
 saveManualReviewButton.addEventListener('click', async () => {
