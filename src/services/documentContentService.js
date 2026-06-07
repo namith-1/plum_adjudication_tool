@@ -69,7 +69,7 @@ async function renderPdfPagesToImageParts(file) {
   ensurePdfDomGlobals();
   const { pdf } = await import('pdf-to-img');
   const configuredMaxPages = Number(process.env.PDF_MAX_PAGES || 20);
-  const maxPages = Math.max(configuredMaxPages, 20);
+  const maxPages = Math.max(1, configuredMaxPages);
   const scale = Number(process.env.PDF_IMAGE_SCALE || 3);
   const document = await pdf(file.buffer, {
     scale,
