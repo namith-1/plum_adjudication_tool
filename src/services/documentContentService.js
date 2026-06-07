@@ -32,7 +32,21 @@ function directoryFileUrl(directoryPath) {
 function getPdfToImgAssetUrls() {
   const pdfToImgEntry = require.resolve('pdf-to-img');
   const pdfToImgRoot = path.resolve(path.dirname(pdfToImgEntry), '..');
-  const pdfjsRoot = path.join(pdfToImgRoot, 'node_modules', 'pdfjs-dist');
+  const candidateRoots = [path.join(pdfToImgRoot, 'node_modules', 'pdfjs-dist')];
+
+  try {
+    candidateRoots.push(path.resolve(path.dirname(require.resolve('pdfjs-dist/package.json'))));
+  } catch {
+    // pdfjs-dist is normally nested under pdf-to-img, but some installs hoist it.
+  }
+
+  const pdfjsRoot = candidateRoots.find((candidate) => {
+    try {
+      return require('fs').existsSync(path.join(candidate, 'standard_fonts'));
+    } catch {
+      return false;
+    }
+  }) || candidateRoots[0];
 
   return {
     standardFontDataUrl: directoryFileUrl(path.join(pdfjsRoot, 'standard_fonts')),
