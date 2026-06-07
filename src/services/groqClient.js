@@ -178,6 +178,11 @@ function normalizeOpenAiMessages(messages) {
   return hasJsonSystemMessage ? messages : [getJsonSystemMessage(), ...(messages || [])];
 }
 
+function getRequestedMaxOutputTokens(options, fallback) {
+  const configured = Number(options.maxCompletionTokens || process.env.AI_MAX_OUTPUT_TOKENS || fallback);
+  return Number.isFinite(configured) && configured > 0 ? configured : fallback;
+}
+
 async function callOpenAiJson(messages, options = {}) {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = options.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
@@ -199,7 +204,7 @@ async function callOpenAiJson(messages, options = {}) {
       model,
       messages: normalizeOpenAiMessages(messages),
       temperature: options.temperature ?? 0,
-      max_completion_tokens: options.maxCompletionTokens || Number(process.env.AI_MAX_OUTPUT_TOKENS || 12000),
+      max_completion_tokens: getRequestedMaxOutputTokens(options, 12000),
       response_format: { type: 'json_object' },
     }),
     signal: options.signal,
@@ -249,6 +254,7 @@ async function callGroqApiJson(messages, options = {}) {
   const apiKey = process.env.GROQ_API_KEY;
   const model = options.model || process.env.GROQ_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct';
   const baseUrl = options.baseUrl || process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1/chat/completions';
+  const maxCompletionTokens = Math.min(getRequestedMaxOutputTokens(options, 6000), 8192);
 
   if (!apiKey) {
     const error = new Error('GROQ_API_KEY is required');
@@ -266,7 +272,7 @@ async function callGroqApiJson(messages, options = {}) {
       model,
       messages: normalizeOpenAiMessages(messages),
       temperature: options.temperature ?? 0,
-      max_completion_tokens: options.maxCompletionTokens || Number(process.env.AI_MAX_OUTPUT_TOKENS || 6000),
+      max_completion_tokens: maxCompletionTokens,
       response_format: { type: 'json_object' },
     }),
     signal: options.signal,
@@ -338,7 +344,7 @@ async function callGeminiJson(messages, options = {}) {
       ...geminiPayload,
       generationConfig: {
         temperature: options.temperature ?? 0,
-        maxOutputTokens: options.maxCompletionTokens || Number(process.env.AI_MAX_OUTPUT_TOKENS || 12000),
+        maxOutputTokens: getRequestedMaxOutputTokens(options, 12000),
         responseMimeType: 'application/json',
       },
     }),
