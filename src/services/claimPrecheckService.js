@@ -253,14 +253,14 @@ async function runClaimPrecheck(input) {
 
   if (input.ignore_duplicate_claims !== true && input.ignore_duplicate_claims !== 'true') {
     const { start: treatmentDayStart, end: treatmentDayEnd } = dayRange(treatmentDate);
-    const duplicateClaim = await UserPolicyClaims.findOne({
+    const acceptedClaim = await UserPolicyClaims.findOne({
       user_policy_id: userPolicy._id,
       treatment_date: { $gte: treatmentDayStart, $lt: treatmentDayEnd },
-      'adjudication.decision': { $in: ['PENDING', 'APPROVED', 'PARTIAL', 'MANUAL_REVIEW'] },
+      'adjudication.decision': { $in: ['APPROVED', 'PARTIAL'] },
     }).sort({ createdAt: -1 });
 
-    if (duplicateClaim) {
-      return manualReview('DUPLICATE_CLAIM_SAME_TREATMENT_DATE', 'A claim for this member and treatment date already exists. Send to manual review for duplicate/fraud assessment.', {
+    if (acceptedClaim) {
+      return manualReview('DUPLICATE_CLAIM_SAME_TREATMENT_DATE', 'An accepted claim for this member and treatment date already exists. Send to manual review for duplicate/fraud assessment.', {
         member: {
           id: user._id,
           member_id: user.member_id,
@@ -287,10 +287,28 @@ async function runClaimPrecheck(input) {
           submission_date_check: submissionDateCheck,
         },
         existing_claim: {
-          claim_id: duplicateClaim.claim_id,
-          decision: duplicateClaim.adjudication?.decision,
-          approved_amount: duplicateClaim.adjudication?.approved_amount,
-          created_at: duplicateClaim.createdAt,
+          claim_id: acceptedClaim.claim_id,
+          decision: acceptedClaim.adjudication?.decision,
+          approved_amount: acceptedClaim.adjudication?.approved_amount,
+          created_at: acceptedClaim.createdAt,
+        },
+      });
+    }
+
+    const unsuccessfulAttemptCount = await UserPolicyClaims.countDocuments({
+      user_policy_id: userPolicy._id,
+      treatment_date: { $gte: treatmentDayStart, $lt: treatmentDayEnd },
+      'adjudication.decision': {
+        $in: ['PENDING', 'REJECTED', 'MANUAL_REVIEW', 'REQUEST_CLEAR_IMAGE', 'REQUEST_MORE_INFO'],
+      },
+    });
+
+    if (unsuccessfulAttemptCount >= 10) {
+      return reject('MAX_UNSUCCESSFUL_ATTEMPTS_SAME_TREATMENT_DATE', 'Maximum unsuccessful claim attempts reached for this member and treatment date. A maximum of 10 unsuccessful submissions is allowed before a successful claim.', {
+        claim_attempts: {
+          treatment_date: formatDate(treatmentDate),
+          unsuccessful_attempt_count: unsuccessfulAttemptCount,
+          max_unsuccessful_attempts: 10,
         },
       });
     }
