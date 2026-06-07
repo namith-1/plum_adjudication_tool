@@ -13,7 +13,8 @@ STRICT RULES
 - Return only valid JSON.
 - Do not hallucinate. Use only provided member/policy/rule/extraction data.
 - Respect adjudication_mode:
-  - normal: do not manual-review only for missing logos, stamps, signatures, license numbers, GST, accreditation, or provider authenticity markers when core claim fields are present. Use warnings instead.
+  - normal: DO NOT test for missing logos, stamps, signatures, license numbers, GST, accreditation, seals, or other provider authenticity markers. In normal mode, set authenticity_markers.status to "not_applicable", passed to true, missing_or_weak_markers to [], and do not mention missing stamps/logos/signatures/licenses in notes, flags, warnings, rejection_reasons, or next_steps.
+  - normal: focus on the claim checks represented in the test cases: member/patient match, treatment and submission dates, active coverage, waiting period, per-claim/annual limits, missing prescription/supporting documents, pre-auth for high-value MRI/CT, covered vs excluded procedures, amount calculation, duplicate/same-day claim risk, and clear/legible documents.
   - strict: missing/weak authenticity markers can trigger MANUAL_REVIEW.
   - In both modes, still enforce core fields such as patient name, provider name, document date, bill amount/line items, medicine/test/procedure identity, and treatment support.
 - Match patient names across documents to DB member name using fuzzy/partial matching. Treat >= 0.70 similarity as acceptable. Names like "Rajesh", "Rajesh Kumar", "Rajesh K P", or minor OCR spelling variants like "Rajest" can match if the core name is clearly the same person. Explain the similarity logic.
@@ -58,13 +59,14 @@ STRICT RULES
   - Diagnostic report: lab/institute name, patient name, report/test date, and test name/result. If lab name or test identity is missing, reject that report as support evidence.
   - Pharmacy bill: pharmacy name, bill date, medicine names or item descriptions, and total/net payable amount. If pharmacy name or total/net amount is missing, reject that bill/item.
 - Authenticity/manual-review signals:
-  - If an important license/registration number is missing or illegible, return MANUAL_REVIEW unless another strong authenticity signal exists.
-  - Prescription should have doctor registration number or clear clinic/doctor stamp/signature/provider identity. Missing doctor registration with weak provider identity should be MANUAL_REVIEW.
-  - Pharmacy bill should have pharmacy name plus drug license number or GST/provider identifier when visible/expected. Missing drug license/GST with weak provider identity should be MANUAL_REVIEW.
-  - Medical bill should have hospital/clinic name plus GST/registration/stamp/logo/header or other provider identity. Missing provider logo/header/stamp/license details should be MANUAL_REVIEW when authenticity is uncertain.
-  - Diagnostic report should have lab name plus accreditation/registration/pathologist/signature/stamp where expected. Missing lab authenticity markers should be MANUAL_REVIEW.
-  - Missing logos alone should not reject if provider name/license/stamp/signature is strong, but missing logo/header along with missing license/registration/stamp/signature should trigger MANUAL_REVIEW.
-  - Add tag "AUTHENTICITY_REVIEW" and flag "Missing important authenticity marker" when routing to manual review for this reason.
+  - Apply this section ONLY when adjudication_mode is "strict".
+  - In normal mode, completely ignore missing logos, stamps, signatures, license numbers, GST, accreditation, seals, and provider authenticity markers.
+  - In strict mode, if an important license/registration number is missing or illegible, return MANUAL_REVIEW unless another strong authenticity signal exists.
+  - In strict mode, prescription should have doctor registration number or clear clinic/doctor stamp/signature/provider identity. Missing doctor registration with weak provider identity should be MANUAL_REVIEW.
+  - In strict mode, pharmacy bill should have pharmacy name plus drug license number or GST/provider identifier when visible/expected. Missing drug license/GST with weak provider identity should be MANUAL_REVIEW.
+  - In strict mode, medical bill should have hospital/clinic name plus GST/registration/stamp/logo/header or other provider identity. Missing provider logo/header/stamp/license details should be MANUAL_REVIEW when authenticity is uncertain.
+  - In strict mode, diagnostic report should have lab name plus accreditation/registration/pathologist/signature/stamp where expected. Missing lab authenticity markers should be MANUAL_REVIEW.
+  - In strict mode, add tag "AUTHENTICITY_REVIEW" and flag "Missing important authenticity marker" when routing to manual review for this reason.
 - For every rejected document or item due to missing fields, include the missing field names in rejection reasons and in the relevant check evidence.
 
 OUTPUT JSON SHAPE

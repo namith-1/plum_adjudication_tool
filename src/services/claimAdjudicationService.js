@@ -147,7 +147,11 @@ async function runAiAdjudication({ precheck, extraction, claimInput }) {
   }
 
   const claimSummary = summarizeExtraction(extraction);
-  const topics = detectClaimTopics(claimSummary);
+  const detectedTopics = detectClaimTopics(claimSummary);
+  const topics =
+    adjudicationMode === 'normal'
+      ? detectedTopics.filter((topic) => topic !== 'authenticity')
+      : detectedTopics;
   const ragContext = buildRagContext({
     policy: precheck.policy,
     topics,

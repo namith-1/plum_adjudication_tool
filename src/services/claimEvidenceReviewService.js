@@ -46,7 +46,7 @@ function reviewPrescription(doc, result) {
     addMissing(result, documentType, 'medical_support', 'major', 'No medicines, investigations, diagnosis, or complaint found.');
   }
 
-  if (!hasValue(doc.doctor_info?.registration_number) && doc.signatures_and_stamps_detected !== true) {
+  if (result.mode === 'strict' && !hasValue(doc.doctor_info?.registration_number) && doc.signatures_and_stamps_detected !== true) {
     addAuthWarning(result, documentType, 'doctor_registration_or_stamp_signature', 'Weak prescription authenticity evidence.');
   }
 }
@@ -62,7 +62,7 @@ function reviewMedicalBill(doc, result) {
     addMissing(result, documentType, 'financials.total_amount_or_line_items', 'critical', 'Cannot calculate claimable bill amount.');
   }
 
-  if (!hasValue(doc.hospital_info?.gst_number) && doc.signatures_and_stamps_detected !== true) {
+  if (result.mode === 'strict' && !hasValue(doc.hospital_info?.gst_number) && doc.signatures_and_stamps_detected !== true) {
     addAuthWarning(result, documentType, 'gst_or_stamp_signature', 'Weak medical bill authenticity evidence.');
   }
 }
@@ -75,7 +75,7 @@ function reviewDiagnosticReport(doc, result) {
   if (!hasValue(doc.report_details?.date)) addMissing(result, documentType, 'report_details.date', 'critical', 'Cannot link report to treatment date.');
   if (safeArray(doc.test_results).length === 0) addMissing(result, documentType, 'test_results', 'critical', 'No test identity/result found.');
 
-  if (!hasValue(doc.lab_info?.accreditation_number) && !hasValue(doc.report_details?.pathologist_name) && doc.signatures_and_stamps_detected !== true) {
+  if (result.mode === 'strict' && !hasValue(doc.lab_info?.accreditation_number) && !hasValue(doc.report_details?.pathologist_name) && doc.signatures_and_stamps_detected !== true) {
     addAuthWarning(result, documentType, 'accreditation_pathologist_or_stamp_signature', 'Weak diagnostic report authenticity evidence.');
   }
 }
@@ -89,7 +89,7 @@ function reviewPharmacyBill(doc, result) {
   if (safeArray(doc.line_items).length === 0) addMissing(result, documentType, 'line_items', 'critical', 'No medicine items found.');
   if (!hasAmount(totalAmount)) addMissing(result, documentType, 'financials.total_amount_or_net_payable', 'critical', 'Cannot calculate pharmacy claim amount.');
 
-  if (!hasValue(doc.pharmacy_info?.drug_license_number) && !hasValue(doc.pharmacy_info?.gst_number)) {
+  if (result.mode === 'strict' && !hasValue(doc.pharmacy_info?.drug_license_number) && !hasValue(doc.pharmacy_info?.gst_number)) {
     addAuthWarning(result, documentType, 'drug_license_or_gst', 'Weak pharmacy bill authenticity evidence.');
   }
 }
@@ -122,6 +122,11 @@ function applyEvidenceReview(adjudication, evidenceReview) {
     return adjudication;
   }
 
+  const reviewReason =
+    evidenceReview.authenticity_warnings.length > 0
+      ? 'important missing fields or weak authenticity markers require manual review'
+      : 'important missing fields require manual review';
+
   return {
     ...adjudication,
     decision: 'MANUAL_REVIEW',
@@ -134,13 +139,16 @@ function applyEvidenceReview(adjudication, evidenceReview) {
       ].filter(Boolean))
     ),
     flags: Array.from(new Set([...(adjudication.flags || []), ...evidenceReview.flags])),
-    notes: `${adjudication.notes || ''} Backend override: important missing fields or weak authenticity markers require manual review.`.trim(),
+    notes: `${adjudication.notes || ''} Backend override: ${reviewReason}.`.trim(),
     checks: {
       ...(adjudication.checks || {}),
       backend_evidence_review: {
         status: 'failed',
         passed: false,
-        reason: 'Backend found critical missing fields or weak authenticity evidence in extracted JSON.',
+        reason:
+          evidenceReview.authenticity_warnings.length > 0
+            ? 'Backend found critical missing fields or weak authenticity evidence in extracted JSON.'
+            : 'Backend found critical missing fields in extracted JSON.',
         evidence_used: [
           JSON.stringify(evidenceReview.missing_fields),
           JSON.stringify(evidenceReview.authenticity_warnings),
