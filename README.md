@@ -69,7 +69,7 @@ MONGO_URI=mongodb+srv://USER:PASSWORD@CLUSTER.mongodb.net/plum_opd_claims
 GROQ_API_KEY=your_groq_api_key
 GROQ_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
 GROQ_BASE_URL=https://api.groq.com/openai/v1/chat/completions
-PDF_MAX_PAGES=5
+PDF_MAX_PAGES=20
 ```
 
 3. Seed policy and test users:
@@ -133,7 +133,7 @@ MONGO_URI=mongodb+srv://USER:PASSWORD@CLUSTER.mongodb.net/plum_opd_claims
 GROQ_API_KEY=your_groq_api_key
 GROQ_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
 GROQ_BASE_URL=https://api.groq.com/openai/v1/chat/completions
-PDF_MAX_PAGES=5
+PDF_MAX_PAGES=20
 ```
 
 MongoDB Atlas Network Access should allow Vercel to connect. For demo deployments, `0.0.0.0/0` is the simplest option.

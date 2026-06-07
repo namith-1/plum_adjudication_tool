@@ -1,4 +1,5 @@
 const path = require('path');
+const { pathToFileURL } = require('url');
 const { createCanvas } = require('@napi-rs/canvas');
 const mammoth = require('mammoth');
 
@@ -27,10 +28,17 @@ function textPart(filename, text) {
 
 async function renderPdfPagesToImageParts(file) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const maxPages = Number(process.env.PDF_MAX_PAGES || 5);
+  const workerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+
+  pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
+
+  const configuredMaxPages = Number(process.env.PDF_MAX_PAGES || 20);
+  const maxPages = Math.max(configuredMaxPages, 20);
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(file.buffer),
     disableWorker: true,
+    useWorkerFetch: false,
+    isEvalSupported: false,
   });
   const pdf = await loadingTask.promise;
   const pageCount = Math.min(pdf.numPages, maxPages);
