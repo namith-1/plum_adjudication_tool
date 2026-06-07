@@ -1,4 +1,5 @@
 const path = require('path');
+const { pathToFileURL } = require('url');
 const { createCanvas } = require('@napi-rs/canvas');
 const mammoth = require('mammoth');
 
@@ -25,12 +26,18 @@ function textPart(filename, text) {
   };
 }
 
+function packageDirectoryUrl(packagePath) {
+  const directoryPath = path.dirname(require.resolve(packagePath));
+  return pathToFileURL(`${directoryPath}${path.sep}`).href;
+}
+
 async function renderPdfPagesToImageParts(file) {
   const pdfWorker = await import('pdfjs-dist/legacy/build/pdf.worker.mjs');
 
   globalThis.pdfjsWorker = pdfWorker;
 
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const standardFontDataUrl = packageDirectoryUrl('pdfjs-dist/standard_fonts/LiberationSans-Regular.ttf');
   const configuredMaxPages = Number(process.env.PDF_MAX_PAGES || 20);
   const maxPages = Math.max(configuredMaxPages, 20);
   const loadingTask = pdfjs.getDocument({
@@ -38,6 +45,7 @@ async function renderPdfPagesToImageParts(file) {
     disableWorker: true,
     useWorkerFetch: false,
     isEvalSupported: false,
+    standardFontDataUrl,
   });
   const pdf = await loadingTask.promise;
   const pageCount = Math.min(pdf.numPages, maxPages);
