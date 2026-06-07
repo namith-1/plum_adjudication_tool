@@ -32,7 +32,11 @@ function directoryFileUrl(directoryPath) {
 function getPdfToImgAssetUrls() {
   const pdfToImgEntry = require.resolve('pdf-to-img');
   const pdfToImgRoot = path.resolve(path.dirname(pdfToImgEntry), '..');
-  const candidateRoots = [path.join(pdfToImgRoot, 'node_modules', 'pdfjs-dist')];
+  const candidateRoots = [
+    path.join(process.cwd(), 'node_modules', 'pdfjs-dist'),
+    path.join(process.cwd(), 'node_modules', 'pdf-to-img', 'node_modules', 'pdfjs-dist'),
+    path.join(pdfToImgRoot, 'node_modules', 'pdfjs-dist'),
+  ];
 
   try {
     candidateRoots.push(path.resolve(path.dirname(require.resolve('pdfjs-dist/package.json'))));
@@ -70,7 +74,7 @@ async function renderPdfPagesToImageParts(file) {
   const { pdf } = await import('pdf-to-img');
   const configuredMaxPages = Number(process.env.PDF_MAX_PAGES || 20);
   const maxPages = Math.max(1, configuredMaxPages);
-  const scale = Number(process.env.PDF_IMAGE_SCALE || 3);
+  const scale = Number(process.env.PDF_IMAGE_SCALE || 2);
   const document = await pdf(file.buffer, {
     scale,
     docInitParams: {
