@@ -143,7 +143,176 @@ function openAiMessagesToGemini(messages) {
   };
 }
 
-async function callGroqJson(messages, options = {}) {
+function getActiveProvider(options = {}) {
+  if (options.provider) {
+    return String(options.provider).toLowerCase();
+  }
+
+  if (process.env.AI_PROVIDER) {
+    return String(process.env.AI_PROVIDER).toLowerCase();
+  }
+
+  if (process.env.GROQ_API_KEY) {
+    return 'groq';
+  }
+
+  if (process.env.OPENAI_API_KEY) {
+    return 'openai';
+  }
+
+  return 'gemini';
+}
+
+function getJsonSystemMessage() {
+  return {
+    role: 'system',
+    content: 'You must return only one complete valid JSON object. Do not include markdown, prose, comments, or explanations.',
+  };
+}
+
+function normalizeOpenAiMessages(messages) {
+  const hasJsonSystemMessage = (messages || []).some(
+    (message) => message.role === 'system' && String(message.content || '').includes('valid JSON')
+  );
+
+  return hasJsonSystemMessage ? messages : [getJsonSystemMessage(), ...(messages || [])];
+}
+
+async function callOpenAiJson(messages, options = {}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = options.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const baseUrl = options.baseUrl || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1/chat/completions';
+
+  if (!apiKey) {
+    const error = new Error('OPENAI_API_KEY is required');
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const response = await fetch(baseUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages: normalizeOpenAiMessages(messages),
+      temperature: options.temperature ?? 0,
+      max_completion_tokens: options.maxCompletionTokens || Number(process.env.AI_MAX_OUTPUT_TOKENS || 12000),
+      response_format: { type: 'json_object' },
+    }),
+    signal: options.signal,
+  });
+
+  const responseBody = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const error = new Error(responseBody?.error?.message || 'OpenAI request failed');
+    error.statusCode = response.status;
+    error.details = responseBody;
+    throw error;
+  }
+
+  const choice = responseBody?.choices?.[0];
+  const content = choice?.message?.content?.trim();
+
+  if (!content) {
+    const error = new Error(
+      choice?.finish_reason === 'length'
+        ? 'OpenAI stopped before returning JSON because max output tokens were reached.'
+        : 'OpenAI response did not include message content'
+    );
+    error.statusCode = 502;
+    error.details = responseBody;
+    throw error;
+  }
+
+  try {
+    return {
+      model,
+      raw_content: content,
+      json: parseJsonOutput(content),
+    };
+  } catch (error) {
+    error.details = {
+      provider: 'openai',
+      model,
+      finishReason: choice?.finish_reason,
+      raw_content_preview: error.raw_content_preview,
+    };
+    throw error;
+  }
+}
+
+async function callGroqApiJson(messages, options = {}) {
+  const apiKey = process.env.GROQ_API_KEY;
+  const model = options.model || process.env.GROQ_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct';
+  const baseUrl = options.baseUrl || process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1/chat/completions';
+
+  if (!apiKey) {
+    const error = new Error('GROQ_API_KEY is required');
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const response = await fetch(baseUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages: normalizeOpenAiMessages(messages),
+      temperature: options.temperature ?? 0,
+      max_completion_tokens: options.maxCompletionTokens || Number(process.env.AI_MAX_OUTPUT_TOKENS || 6000),
+      response_format: { type: 'json_object' },
+    }),
+    signal: options.signal,
+  });
+
+  const responseBody = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const error = new Error(responseBody?.error?.message || 'Groq request failed');
+    error.statusCode = response.status;
+    error.details = responseBody;
+    throw error;
+  }
+
+  const choice = responseBody?.choices?.[0];
+  const content = choice?.message?.content?.trim();
+
+  if (!content) {
+    const error = new Error(
+      choice?.finish_reason === 'length'
+        ? 'Groq stopped before returning JSON because max output tokens were reached.'
+        : 'Groq response did not include message content'
+    );
+    error.statusCode = 502;
+    error.details = responseBody;
+    throw error;
+  }
+
+  try {
+    return {
+      model,
+      raw_content: content,
+      json: parseJsonOutput(content),
+    };
+  } catch (error) {
+    error.details = {
+      provider: 'groq',
+      model,
+      finishReason: choice?.finish_reason,
+      raw_content_preview: error.raw_content_preview,
+    };
+    throw error;
+  }
+}
+
+async function callGeminiJson(messages, options = {}) {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   const model = options.model || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite-preview';
   const modelPath = String(model).startsWith('models/') ? String(model).slice('models/'.length) : model;
@@ -216,6 +385,20 @@ async function callGroqJson(messages, options = {}) {
   }
 }
 
+async function callGroqJson(messages, options = {}) {
+  const provider = getActiveProvider(options);
+
+  if (provider === 'openai') {
+    return callOpenAiJson(messages, options);
+  }
+
+  if (provider === 'groq' || provider === 'grok') {
+    return callGroqApiJson(messages, options);
+  }
+
+  return callGeminiJson(messages, options);
+}
+
 function getRetryDelayMs(error) {
   const message = error?.details?.error?.message || error?.message || '';
   const match = message.match(/try again in ([\d.]+)s/i);
@@ -240,6 +423,28 @@ function getGeminiModelFallbacks(options = {}) {
   return uniqueValues([options.model || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite-preview', ...fallbackModels]);
 }
 
+function getOpenAiModelFallbacks(options = {}) {
+  const fallbackModels = String(options.fallbackModels || process.env.OPENAI_FALLBACK_MODELS || 'gpt-4o-mini,gpt-4.1-mini')
+    .split(',')
+    .map((model) => model.trim())
+    .filter(Boolean);
+
+  return uniqueValues([options.model || process.env.OPENAI_MODEL || 'gpt-4o-mini', ...fallbackModels]);
+}
+
+function getGroqModelFallbacks(options = {}) {
+  const fallbackModels = String(
+    options.fallbackModels ||
+      process.env.GROQ_FALLBACK_MODELS ||
+      'meta-llama/llama-4-scout-17b-16e-instruct'
+  )
+    .split(',')
+    .map((model) => model.trim())
+    .filter(Boolean);
+
+  return uniqueValues([options.model || process.env.GROQ_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct', ...fallbackModels]);
+}
+
 function isRetryableGeminiError(error) {
   const status = error.details?.error?.status;
   const code = error.details?.error?.code;
@@ -255,9 +460,45 @@ function isRetryableGeminiError(error) {
   );
 }
 
+function isRetryableOpenAiError(error) {
+  const code = error.details?.error?.code;
+  const type = error.details?.error?.type;
+
+  return (
+    error.statusCode === 408 ||
+    error.statusCode === 409 ||
+    error.statusCode === 429 ||
+    error.statusCode >= 500 ||
+    code === 'rate_limit_exceeded' ||
+    type === 'tokens' ||
+    type === 'server_error'
+  );
+}
+
+function isRetryableGroqError(error) {
+  const code = error.details?.error?.code;
+  const type = error.details?.error?.type;
+
+  return (
+    error.statusCode === 408 ||
+    error.statusCode === 409 ||
+    error.statusCode === 429 ||
+    error.statusCode >= 500 ||
+    code === 'rate_limit_exceeded' ||
+    type === 'tokens' ||
+    type === 'server_error'
+  );
+}
+
 async function callGroqJsonWithRetry(messages, options = {}) {
   const attempts = options.attempts || 3;
-  const models = getGeminiModelFallbacks(options);
+  const provider = getActiveProvider(options);
+  const models =
+    provider === 'openai'
+      ? getOpenAiModelFallbacks(options)
+      : provider === 'groq' || provider === 'grok'
+        ? getGroqModelFallbacks(options)
+        : getGeminiModelFallbacks(options);
   let lastError = null;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -267,7 +508,14 @@ async function callGroqJsonWithRetry(messages, options = {}) {
       } catch (error) {
         lastError = error;
 
-        if (!isRetryableGeminiError(error)) {
+        const isRetryable =
+          provider === 'openai'
+            ? isRetryableOpenAiError(error)
+            : provider === 'groq' || provider === 'grok'
+              ? isRetryableGroqError(error)
+              : isRetryableGeminiError(error);
+
+        if (!isRetryable) {
           throw error;
         }
       }
@@ -278,7 +526,7 @@ async function callGroqJsonWithRetry(messages, options = {}) {
     }
   }
 
-  throw lastError || new Error('Gemini retry failed unexpectedly');
+  throw lastError || new Error('AI retry failed unexpectedly');
 }
 
 module.exports = {
